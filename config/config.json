@@ -1,0 +1,34 @@
+{
+    "project": {
+        "name": "restaurant-monitor"
+    },
+    "detector": {
+        "model": "models/yolo/yolov8n.pt",
+        "conf_threshold": 0.4,
+        "imgsz": 480,
+        "min_box_width": 20,
+        "min_box_height": 20,
+        "target_fps": 2,
+        "max_seconds": null,
+        "device": null
+    },
+    "paths": {
+    "videos_index": "data/metadata/videos/videos_index.json",
+    "detections_dir": "data/processed/detections",
+    "tracking_dir": "data/processed/tracking",
+    "classifications_dir": "data/processed/classifications",
+    "worker_assignments_dir": "data/processed/worker_assignments",
+    "outputs_dir": "data/outputs",
+    "embeddings_dir": "data/embeddings",
+    "debug_detection_frames_dir": "data/debug/detection/frames",
+    "debug_detection_videos_dir": "data/debug/detection/videos",
+    "debug_zones_reference_frames_dir": "data/debug/zones/reference_frames",
+    "debug_zones_preview_dir": "data/debug/zones/zones_preview",
+    "debug_zones_unknown_points_dir": "data/debug/zones/unknown_points"
+},
+    "debug": {
+        "save_debug_frames": false,
+        "max_debug_frames": 30,
+        "save_debug_video": false
+        }
+    }

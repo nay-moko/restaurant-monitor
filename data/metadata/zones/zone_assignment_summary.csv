@@ -1,0 +1,11 @@
+﻿camera_id,video_id,file,total_detections,matched_detections,unknown_detections,matched_rate
+camera_01,video_001,data/processed/detections/camera_01/video_001_detections.json,12370,6536,5834,0.5284
+camera_02,video_001,data/processed/detections/camera_02/video_001_detections.json,22881,22270,611,0.9733
+camera_04,video_001,data/processed/detections/camera_04/video_001_detections.json,9942,9942,0,1.0
+camera_06,video_001,data/processed/detections/camera_06/video_001_detections.json,10777,10724,53,0.9951
+camera_07,video_001,data/processed/detections/camera_07/video_001_detections.json,4319,4311,8,0.9981
+camera_11,video_001,data/processed/detections/camera_11/video_001_detections.json,5566,5499,67,0.988
+camera_11,video_002,data/processed/detections/camera_11/video_002_detections.json,495,450,45,0.9091
+camera_13,video_001,data/processed/detections/camera_13/video_001_detections.json,3049,3042,7,0.9977
+camera_15,video_001,data/processed/detections/camera_15/video_001_detections.json,29801,29632,169,0.9943
+camera_16,video_001,data/processed/detections/camera_16/video_001_detections.json,14796,14787,9,0.9994

@@ -1,0 +1,761 @@
+{
+  "camera_01": {
+    "image_size": {
+      "width": 1280,
+      "height": 1440
+    },
+    "zones": [
+      {
+        "zone_id": "winter_tables_left",
+        "zone_type": "table_area",
+        "zone_name": "Winter Tables Left",
+        "points": [
+          [
+            974,
+            380
+          ],
+          [
+            298,
+            772
+          ],
+          [
+            132,
+            243
+          ],
+          [
+            554,
+            115
+          ]
+        ]
+      },
+      {
+        "zone_id": "winter_service_path",
+        "zone_type": "service_path",
+        "zone_name": "Winter Service Path",
+        "points": [
+          [
+            952,
+            353
+          ],
+          [
+            266,
+            666
+          ],
+          [
+            239,
+            1126
+          ],
+          [
+            1040,
+            389
+          ]
+        ]
+      },
+      {
+        "zone_id": "winter_tables_right",
+        "zone_type": "table_area",
+        "zone_name": "Winter Tables Right",
+        "points": [
+          [
+            1004,
+            346
+          ],
+          [
+            221,
+            1067
+          ],
+          [
+            747,
+            1415
+          ],
+          [
+            1226,
+            494
+          ]
+        ]
+      },
+      {
+        "zone_id": "winter_front_area",
+        "zone_type": "open_area",
+        "zone_name": "Winter Front Area",
+        "points": [
+          [
+            80,
+            433
+          ],
+          [
+            430,
+            946
+          ],
+          [
+            35,
+            1330
+          ],
+          [
+            2,
+            518
+          ]
+        ]
+      }
+    ]
+  },
+  "camera_02": {
+    "image_size": {
+      "width": 1920,
+      "height": 1080
+    },
+    "zones": [
+      {
+        "zone_id": "winter_section_full",
+        "zone_type": "mixed_area",
+        "zone_name": "Winter Section Full View",
+        "points": [
+          [
+            0,
+            0
+          ],
+          [
+            1920,
+            0
+          ],
+          [
+            1920,
+            1080
+          ],
+          [
+            0,
+            1080
+          ]
+        ]
+      },
+      {
+        "zone_id": "winter_tables_area",
+        "zone_type": "table_area",
+        "zone_name": "Winter Tables Right",
+        "points": [
+          [
+            836,
+            187
+          ],
+          [
+            1420,
+            507
+          ],
+          [
+            1887,
+            316
+          ],
+          [
+            1291,
+            145
+          ]
+        ]
+      },
+      {
+        "zone_id": "winter_service_path",
+        "zone_type": "service_path",
+        "zone_name": "Winter Service Path",
+        "points": [
+          [
+            500,
+            242
+          ],
+          [
+            655,
+            216
+          ],
+          [
+            1482,
+            613
+          ],
+          [
+            1206,
+            762
+          ]
+        ]
+      },
+      {
+        "zone_id": "winter_hallway",
+        "zone_type": "hallway",
+        "zone_name": "Winter Hallway",
+        "points": [
+          [
+            1889,
+            385
+          ],
+          [
+            1910,
+            592
+          ],
+          [
+            798,
+            925
+          ],
+          [
+            755,
+            829
+          ]
+        ]
+      }
+    ]
+  },
+  "camera_04": {
+    "image_size": {
+      "width": 1920,
+      "height": 1080
+    },
+    "zones": [
+      {
+        "zone_id": "cashier_full",
+        "zone_type": "staff_area",
+        "zone_name": "Cashier Area",
+        "points": [
+          [
+            0,
+            0
+          ],
+          [
+            1920,
+            0
+          ],
+          [
+            1920,
+            1080
+          ],
+          [
+            0,
+            1080
+          ]
+        ]
+      },
+      {
+        "zone_id": "cashier_counter",
+        "zone_type": "cashier",
+        "zone_name": "Cashier Counter",
+        "points": [
+          [
+            1095,
+            30
+          ],
+          [
+            183,
+            785
+          ],
+          [
+            1747,
+            1073
+          ],
+          [
+            1766,
+            309
+          ]
+        ]
+      },
+      {
+        "zone_id": "cashier_staff_area",
+        "zone_type": "staff_area",
+        "zone_name": "Cashier Staff Area",
+        "points": [
+          [
+            311,
+            16
+          ],
+          [
+            109,
+            220
+          ],
+          [
+            492,
+            484
+          ],
+          [
+            927,
+            145
+          ]
+        ]
+      },
+      {
+        "zone_id": "cashier_service_path",
+        "zone_type": "service_path",
+        "zone_name": "Cashier Service Path",
+        "points": [
+          [
+            1630,
+            78
+          ],
+          [
+            1737,
+            111
+          ],
+          [
+            1708,
+            368
+          ],
+          [
+            1404,
+            325
+          ]
+        ]
+      }
+    ]
+  },
+  "camera_06": {
+    "image_size": {
+      "width": 1920,
+      "height": 1080
+    },
+    "zones": [
+      {
+        "zone_id": "bathroom_entrance_full",
+        "zone_type": "mixed_area",
+        "zone_name": "Bathroom Entrance",
+        "points": [
+          [
+            0,
+            0
+          ],
+          [
+            1920,
+            0
+          ],
+          [
+            1920,
+            1080
+          ],
+          [
+            0,
+            1080
+          ]
+        ]
+      },
+      {
+        "zone_id": "bathroom_entrance",
+        "zone_type": "bathroom_entrance",
+        "zone_name": "Bathroom Entrance",
+        "points": [
+          [
+            331,
+            13
+          ],
+          [
+            480,
+            28
+          ],
+          [
+            490,
+            399
+          ],
+          [
+            336,
+            326
+          ],
+          [
+            83,
+            1
+          ],
+          [
+            187,
+            419
+          ],
+          [
+            52,
+            545
+          ],
+          [
+            5,
+            175
+          ]
+        ]
+      },
+      {
+        "zone_id": "bathroom_corridor",
+        "zone_type": "corridor",
+        "zone_name": "Bathroom Corridor",
+        "points": [
+          [
+            342,
+            384
+          ],
+          [
+            785,
+            711
+          ],
+          [
+            529,
+            1071
+          ],
+          [
+            8,
+            730
+          ]
+        ]
+      }
+    ]
+  },
+  "camera_07": {
+    "image_size": {
+      "width": 1920,
+      "height": 1080
+    },
+    "zones": [
+      {
+        "zone_id": "buffet_full",
+        "zone_type": "staff_area",
+        "zone_name": "Buffet Area",
+        "points": [
+          [
+            0,
+            0
+          ],
+          [
+            1920,
+            0
+          ],
+          [
+            1920,
+            1080
+          ],
+          [
+            0,
+            1080
+          ]
+        ]
+      },
+      {
+        "zone_id": "buffet_counter",
+        "zone_type": "buffet",
+        "zone_name": "Buffet Counter",
+        "points": [
+          [
+            1738,
+            351
+          ],
+          [
+            1581,
+            972
+          ],
+          [
+            87,
+            412
+          ],
+          [
+            105,
+            211
+          ]
+        ]
+      }
+    ]
+  },
+  "camera_11": {
+    "image_size": {
+      "width": 1920,
+      "height": 1080
+    },
+    "zones": [
+      {
+        "zone_id": "entrance_1_full",
+        "zone_type": "entrance",
+        "zone_name": "Entrance 1",
+        "points": [
+          [
+            0,
+            0
+          ],
+          [
+            1920,
+            0
+          ],
+          [
+            1920,
+            1080
+          ],
+          [
+            0,
+            1080
+          ]
+        ]
+      },
+      {
+        "zone_id": "entrance_area",
+        "zone_type": "entrance",
+        "zone_name": "Entrance Area",
+        "points": [
+          [
+            334,
+            983
+          ],
+          [
+            962,
+            744
+          ],
+          [
+            1267,
+            1042
+          ],
+          [
+            360,
+            1077
+          ]
+        ]
+      }
+    ]
+  },
+  "camera_13": {
+    "image_size": {
+      "width": 1920,
+      "height": 1080
+    },
+    "zones": [
+      {
+        "zone_id": "entrance_corridor_full",
+        "zone_type": "corridor",
+        "zone_name": "Entrance Corridor and Prayer Room",
+        "points": [
+          [
+            0,
+            0
+          ],
+          [
+            1920,
+            0
+          ],
+          [
+            1920,
+            1080
+          ],
+          [
+            0,
+            1080
+          ]
+        ]
+      },
+      {
+        "zone_id": "entrance_corridor",
+        "zone_type": "corridor",
+        "zone_name": "Entrance Corridor",
+        "points": [
+          [
+            1322,
+            172
+          ],
+          [
+            1010,
+            1006
+          ],
+          [
+            1626,
+            1058
+          ],
+          [
+            1551,
+            229
+          ]
+        ]
+      },
+      {
+        "zone_id": "prayer_room_entrance",
+        "zone_type": "prayer_room_entrance",
+        "zone_name": "Prayer Room Entrance",
+        "points": [
+          [
+            198,
+            500
+          ],
+          [
+            693,
+            496
+          ],
+          [
+            558,
+            1071
+          ],
+          [
+            8,
+            916
+          ]
+        ]
+      }
+    ]
+  },
+  "camera_15": {
+    "image_size": {
+      "width": 1920,
+      "height": 1080
+    },
+    "zones": [
+      {
+        "zone_id": "summer_section_full",
+        "zone_type": "mixed_area",
+        "zone_name": "Summer Section Full View",
+        "points": [
+          [
+            0,
+            0
+          ],
+          [
+            1920,
+            0
+          ],
+          [
+            1920,
+            1080
+          ],
+          [
+            0,
+            1080
+          ]
+        ]
+      },
+      {
+        "zone_id": "summer_tables_area",
+        "zone_type": "table_area",
+        "zone_name": "Summer Tables Area",
+        "points": [
+          [
+            803,
+            112
+          ],
+          [
+            604,
+            30
+          ],
+          [
+            134,
+            200
+          ],
+          [
+            519,
+            1061
+          ],
+          [
+            1112,
+            848
+          ]
+        ]
+      },
+      {
+        "zone_id": "summer_service_path",
+        "zone_type": "service_path",
+        "zone_name": "Summer Service Path",
+        "points": [
+          [
+            551,
+            278
+          ],
+          [
+            792,
+            161
+          ],
+          [
+            1856,
+            702
+          ],
+          [
+            1559,
+            1060
+          ]
+        ]
+      },
+      {
+        "zone_id": "summer_hallway",
+        "zone_type": "hallway",
+        "zone_name": "Summer Hallway",
+        "points": [
+          [
+            862,
+            101
+          ],
+          [
+            464,
+            283
+          ],
+          [
+            523,
+            334
+          ],
+          [
+            927,
+            145
+          ]
+        ]
+      }
+    ]
+  },
+  "camera_16": {
+    "image_size": {
+      "width": 1920,
+      "height": 1080
+    },
+    "zones": [
+      {
+        "zone_id": "river_section_full",
+        "zone_type": "mixed_area",
+        "zone_name": "River Section Full View",
+        "points": [
+          [
+            0,
+            0
+          ],
+          [
+            1920,
+            0
+          ],
+          [
+            1920,
+            1080
+          ],
+          [
+            0,
+            1080
+          ]
+        ]
+      },
+      {
+        "zone_id": "river_tables_area",
+        "zone_type": "table_area",
+        "zone_name": "River Tables Area",
+        "points": [
+          [
+            706,
+            78
+          ],
+          [
+            600,
+            124
+          ],
+          [
+            1313,
+            957
+          ],
+          [
+            1589,
+            725
+          ]
+        ]
+      },
+      {
+        "zone_id": "river_service_path",
+        "zone_type": "service_path",
+        "zone_name": "River Service Path",
+        "points": [
+          [
+            610,
+            116
+          ],
+          [
+            1248,
+            1002
+          ],
+          [
+            792,
+            1061
+          ],
+          [
+            556,
+            135
+          ]
+        ]
+      }
+    ]
+  }
+}

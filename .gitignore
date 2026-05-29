@@ -1,0 +1,41 @@
+# =========================
+# Python environment/cache
+# =========================
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# =========================
+# Jupyter
+# =========================
+.ipynb_checkpoints/
+notebooks/01_yolo_detection_test.ipynb
+
+# =========================
+# Raw videos and media
+# =========================
+data/raw_videos/
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+
+data/debug/detection/
+
+
+runs/
+
+
+restaurant-monitor-output.md
+restaurant-monitor-output.txt
+
+.env
+
+.DS_Store
+Thumbs.db
+*.log

@@ -1,0 +1,52 @@
+[
+  {
+    "camera_id": "camera_01",
+    "video_id": "video_001",
+    "detections_with_zones_path": "data/processed/detections_with_zones/camera_01/video_001_detections_with_zones.json"
+  },
+  {
+    "camera_id": "camera_02",
+    "video_id": "video_001",
+    "detections_with_zones_path": "data/processed/detections_with_zones/camera_02/video_001_detections_with_zones.json"
+  },
+  {
+    "camera_id": "camera_04",
+    "video_id": "video_001",
+    "detections_with_zones_path": "data/processed/detections_with_zones/camera_04/video_001_detections_with_zones.json"
+  },
+  {
+    "camera_id": "camera_06",
+    "video_id": "video_001",
+    "detections_with_zones_path": "data/processed/detections_with_zones/camera_06/video_001_detections_with_zones.json"
+  },
+  {
+    "camera_id": "camera_07",
+    "video_id": "video_001",
+    "detections_with_zones_path": "data/processed/detections_with_zones/camera_07/video_001_detections_with_zones.json"
+  },
+  {
+    "camera_id": "camera_11",
+    "video_id": "video_001",
+    "detections_with_zones_path": "data/processed/detections_with_zones/camera_11/video_001_detections_with_zones.json"
+  },
+  {
+    "camera_id": "camera_11",
+    "video_id": "video_002",
+    "detections_with_zones_path": "data/processed/detections_with_zones/camera_11/video_002_detections_with_zones.json"
+  },
+  {
+    "camera_id": "camera_13",
+    "video_id": "video_001",
+    "detections_with_zones_path": "data/processed/detections_with_zones/camera_13/video_001_detections_with_zones.json"
+  },
+  {
+    "camera_id": "camera_15",
+    "video_id": "video_001",
+    "detections_with_zones_path": "data/processed/detections_with_zones/camera_15/video_001_detections_with_zones.json"
+  },
+  {
+    "camera_id": "camera_16",
+    "video_id": "video_001",
+    "detections_with_zones_path": "data/processed/detections_with_zones/camera_16/video_001_detections_with_zones.json"
+  }
+]

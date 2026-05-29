@@ -1,0 +1,143 @@
+[
+  {
+    "camera_id": "camera_01",
+    "video_id": "video_001",
+    "file": "data/processed/detections_with_zones/camera_01/video_001_detections_with_zones.json",
+    "frames": 7714,
+    "total_detections": 12370,
+    "matched": 5615,
+    "unknown": 6755,
+    "matched_rate": 0.4539,
+    "zone_type_counts": {
+      "mixed_area": 4433,
+      "unknown": 6755,
+      "service_path": 3,
+      "table_area": 1179
+    }
+  },
+  {
+    "camera_id": "camera_02",
+    "video_id": "video_001",
+    "file": "data/processed/detections_with_zones/camera_02/video_001_detections_with_zones.json",
+    "frames": 7714,
+    "total_detections": 22881,
+    "matched": 22270,
+    "unknown": 611,
+    "matched_rate": 0.9733,
+    "zone_type_counts": {
+      "unknown": 611,
+      "mixed_area": 22270
+    }
+  },
+  {
+    "camera_id": "camera_04",
+    "video_id": "video_001",
+    "file": "data/processed/detections_with_zones/camera_04/video_001_detections_with_zones.json",
+    "frames": 5621,
+    "total_detections": 9942,
+    "matched": 9942,
+    "unknown": 0,
+    "matched_rate": 1.0,
+    "zone_type_counts": {
+      "staff_area": 9942
+    }
+  },
+  {
+    "camera_id": "camera_06",
+    "video_id": "video_001",
+    "file": "data/processed/detections_with_zones/camera_06/video_001_detections_with_zones.json",
+    "frames": 9503,
+    "total_detections": 10777,
+    "matched": 10724,
+    "unknown": 53,
+    "matched_rate": 0.9951,
+    "zone_type_counts": {
+      "mixed_area": 10724,
+      "unknown": 53
+    }
+  },
+  {
+    "camera_id": "camera_07",
+    "video_id": "video_001",
+    "file": "data/processed/detections_with_zones/camera_07/video_001_detections_with_zones.json",
+    "frames": 7714,
+    "total_detections": 4319,
+    "matched": 4311,
+    "unknown": 8,
+    "matched_rate": 0.9981,
+    "zone_type_counts": {
+      "staff_area": 4311,
+      "unknown": 8
+    }
+  },
+  {
+    "camera_id": "camera_11",
+    "video_id": "video_001",
+    "file": "data/processed/detections_with_zones/camera_11/video_001_detections_with_zones.json",
+    "frames": 4914,
+    "total_detections": 5566,
+    "matched": 5499,
+    "unknown": 67,
+    "matched_rate": 0.988,
+    "zone_type_counts": {
+      "entrance": 5499,
+      "unknown": 67
+    }
+  },
+  {
+    "camera_id": "camera_11",
+    "video_id": "video_002",
+    "file": "data/processed/detections_with_zones/camera_11/video_002_detections_with_zones.json",
+    "frames": 3716,
+    "total_detections": 495,
+    "matched": 450,
+    "unknown": 45,
+    "matched_rate": 0.9091,
+    "zone_type_counts": {
+      "entrance": 450,
+      "unknown": 45
+    }
+  },
+  {
+    "camera_id": "camera_13",
+    "video_id": "video_001",
+    "file": "data/processed/detections_with_zones/camera_13/video_001_detections_with_zones.json",
+    "frames": 5158,
+    "total_detections": 3049,
+    "matched": 3042,
+    "unknown": 7,
+    "matched_rate": 0.9977,
+    "zone_type_counts": {
+      "corridor": 3042,
+      "unknown": 7
+    }
+  },
+  {
+    "camera_id": "camera_15",
+    "video_id": "video_001",
+    "file": "data/processed/detections_with_zones/camera_15/video_001_detections_with_zones.json",
+    "frames": 7714,
+    "total_detections": 29801,
+    "matched": 29632,
+    "unknown": 169,
+    "matched_rate": 0.9943,
+    "zone_type_counts": {
+      "mixed_area": 29632,
+      "unknown": 169
+    }
+  },
+  {
+    "camera_id": "camera_16",
+    "video_id": "video_001",
+    "file": "data/processed/detections_with_zones/camera_16/video_001_detections_with_zones.json",
+    "frames": 14391,
+    "total_detections": 14796,
+    "matched": 14787,
+    "unknown": 9,
+    "matched_rate": 0.9994,
+    "zone_type_counts": {
+      "mixed_area": 14787,
+      "unknown": 9
+    }
+  }
+]
