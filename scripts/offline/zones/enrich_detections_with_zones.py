@@ -1,16 +1,14 @@
+import json
 import sys
 from pathlib import Path
 
-PROJECT_DIR = Path(__file__).resolve().parents[2]
+PROJECT_DIR = Path(__file__).resolve().parents[3]
 sys.path.append(str(PROJECT_DIR))
-
-import json
 from src.zone_management.zone_manager import ZoneManager
 
 
 DETECTIONS_DIR = PROJECT_DIR / "data" / "processed" / "detections"
 OUTPUT_DIR = PROJECT_DIR / "data" / "processed" / "detections_with_zones"
-
 
 
 def enrich_file(input_path: Path, zone_manager: ZoneManager):
@@ -28,9 +26,7 @@ def enrich_file(input_path: Path, zone_manager: ZoneManager):
     enriched_frames = []
 
     for frame_result in frames:
-        enriched_frames.append(
-            zone_manager.enrich_frame_result(frame_result)
-        )
+        enriched_frames.append(zone_manager.enrich_frame_result(frame_result))
 
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(enriched_frames, f, indent=2, ensure_ascii=False)

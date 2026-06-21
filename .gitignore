@@ -39,3 +39,20 @@ restaurant-monitor-output.txt
 .DS_Store
 Thumbs.db
 *.log
+# =========================
+# Project Specific & Generated Data
+# =========================
+# حظر البيئة الافتراضية الخاصة بجهازكِ والتي تظهر في الـ status
+.restaurant_env/
+
+# حظر مجلدات الـ Crops والتحليلات والمخرجات لتجنب تكرار آلاف الصور والملفات
+data/debug/
+data/analysis/
+data/artifacts/
+data/processed/
+data/outputs/
+
+# حظر ملفات موديلات الـ YOLO والأوزان الضخمة (مثل yolov8n.pt المكتشف في المجلد الرئيسي)
+*.pt
+*.onnx
+*.weights

@@ -5,13 +5,14 @@ from pathlib import Path
 import pandas as pd
 
 
-PROJECT_DIR = Path(__file__).resolve().parents[2]
+PROJECT_DIR = Path(__file__).resolve().parents[3]
 sys.path.append(str(PROJECT_DIR))
 from src.zone_management.zone_manager import ZoneManager
 
 
 DETECTIONS_DIR = PROJECT_DIR / "data" / "processed" / "detections"
 METADATA_DIR = PROJECT_DIR / "data" / "metadata" / "zones"
+
 
 def inspect_detection_file(json_path: Path, zone_manager: ZoneManager):
     camera_id = json_path.parent.name
@@ -32,10 +33,7 @@ def inspect_detection_file(json_path: Path, zone_manager: ZoneManager):
         for detection in frame.get("detections", []):
             total_detections += 1
 
-            zone = zone_manager.get_bbox_zone(
-                camera_id=frame_camera_id,
-                box=detection["box"]
-            )
+            zone = zone_manager.get_bbox_zone(camera_id=frame_camera_id, box=detection["box"])
 
             zone_id = zone.get("zone_id", "unknown")
             zone_type = zone.get("zone_type", "unknown")
@@ -48,11 +46,7 @@ def inspect_detection_file(json_path: Path, zone_manager: ZoneManager):
             else:
                 unknown_detections += 1
 
-    matched_rate = (
-        matched_detections / total_detections
-        if total_detections > 0
-        else 0
-    )
+    matched_rate = matched_detections / total_detections if total_detections > 0 else 0
 
     return {
         "camera_id": camera_id,
@@ -62,7 +56,7 @@ def inspect_detection_file(json_path: Path, zone_manager: ZoneManager):
         "matched_detections": matched_detections,
         "unknown_detections": unknown_detections,
         "matched_rate": round(matched_rate, 4),
-        "zone_counts": zone_counts
+        "zone_counts": zone_counts,
     }
 
 
@@ -92,7 +86,6 @@ def main():
 
     with open(output_json, "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2, ensure_ascii=False)
-
 
     csv_rows = []
     for item in summary:

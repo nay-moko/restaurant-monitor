@@ -13,8 +13,8 @@ DETECTIONS_INDEX_PATH = METADATA_DIR / "detections_index.json"
 DETECTIONS_SUMMARY_JSON_PATH = METADATA_DIR / "detections_summary.json"
 DETECTIONS_SUMMARY_CSV_PATH = METADATA_DIR / "detections_summary.csv"
 
-def load_videos_index():
 
+def load_videos_index():
     if not VIDEOS_INDEX_PATH.exists():
         print(f"⚠️ videos_index.json not found: {VIDEOS_INDEX_PATH}")
         return {}
@@ -32,7 +32,6 @@ def load_videos_index():
 
 
 def inspect_detection_file(json_path, videos_lookup):
-
     with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
@@ -41,10 +40,7 @@ def inspect_detection_file(json_path, videos_lookup):
 
     sampled_frames = len(data)
 
-    detections_per_frame = [
-        len(frame.get("detections", []))
-        for frame in data
-    ]
+    detections_per_frame = [len(frame.get("detections", [])) for frame in data]
 
     total_detections = sum(detections_per_frame)
     empty_frames = sum(1 for count in detections_per_frame if count == 0)
@@ -52,11 +48,7 @@ def inspect_detection_file(json_path, videos_lookup):
 
     max_detections_in_frame = max(detections_per_frame) if detections_per_frame else 0
 
-    avg_detections_per_frame = (
-        total_detections / sampled_frames
-        if sampled_frames > 0
-        else 0
-    )
+    avg_detections_per_frame = total_detections / sampled_frames if sampled_frames > 0 else 0
 
     if sampled_frames > 0:
         first_frame_index = data[0].get("frame_index")
@@ -64,7 +56,6 @@ def inspect_detection_file(json_path, videos_lookup):
 
         start_time_seconds = data[0].get("time_seconds")
         end_time_seconds = data[-1].get("time_seconds")
-
 
         json_camera_id = data[0].get("camera_id")
         json_video_id = data[0].get("video_id")
@@ -93,24 +84,20 @@ def inspect_detection_file(json_path, videos_lookup):
         "camera_id": camera_id,
         "video_id": video_id,
         "detections_path": relative_detection_path,
-
         "sampled_frames": sampled_frames,
         "total_detections": total_detections,
         "empty_frames": empty_frames,
         "non_empty_frames": non_empty_frames,
         "max_detections_in_frame": max_detections_in_frame,
         "avg_detections_per_frame": round(avg_detections_per_frame, 3),
-
         "first_frame_index": first_frame_index,
         "last_frame_index": last_frame_index,
         "start_time_seconds": start_time_seconds,
         "end_time_seconds": end_time_seconds,
         "duration_covered_seconds": duration_covered_seconds,
         "estimated_sample_fps": estimated_sample_fps,
-
         "json_camera_id": json_camera_id,
         "json_video_id": json_video_id,
-
         "raw_video_path": video_info.get("path"),
         "original_fps": video_info.get("fps"),
         "width": video_info.get("width"),
@@ -142,11 +129,13 @@ def main():
     for json_path in detection_files:
         record = inspect_detection_file(json_path, videos_lookup)
 
-        detections_index.append({
-            "camera_id": record["camera_id"],
-            "video_id": record["video_id"],
-            "detections_path": record["detections_path"]
-        })
+        detections_index.append(
+            {
+                "camera_id": record["camera_id"],
+                "video_id": record["video_id"],
+                "detections_path": record["detections_path"],
+            }
+        )
 
         summary_records.append(record)
 

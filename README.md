@@ -59,7 +59,52 @@ config/thresholds.json
 
 `thresholds.json` defines confidence thresholds and rule parameters.
 
-**7. Set environment variables**
+**7. Data layout**
+
+The data folders are now grouped by purpose:
+
+```text
+data/
+├── raw_videos/
+├── processed/
+│   ├── detections/
+│   ├── detections_with_zones/
+│   └── tracking/
+├── metadata/
+│   ├── videos/
+│   ├── detections/
+│   └── zones/
+├── debug/
+│   ├── detection/
+│   ├── tracking/
+│   ├── zones/
+│   ├── classification/
+│   └── reid/
+├── analysis/
+└── artifacts/
+	├── outputs/
+	└── reid_embeddings/
+```
+
+**8. Script layout**
+
+The scripts are now separated by purpose:
+
+```text
+scripts/
+├── offline/
+│   ├── data/
+│   ├── detection/
+│   ├── tracking/
+│   ├── reports/
+│   └── zones/
+├── validation/
+│   ├── tracking/
+│   └── zones/
+└── live/
+```
+
+**9. Set environment variables**
 
 ```bash
 cp .env.example .env
@@ -67,7 +112,7 @@ cp .env.example .env
 
 Open `.env` and fill in your PostgreSQL and Redis credentials if you are running the backend/database layer.
 
-**8. Set up the database**
+**10. Set up the database**
 
 This step is only required when working on the backend/database part.
 
@@ -75,46 +120,82 @@ This step is only required when working on the backend/database part.
 python -c "from src.storage.database import DatabaseManager; DatabaseManager().create_tables()"
 ```
 
-**9. Validate zones**
+**11. Validate zones**
 
 Before running zone-based logic, validate the zones configuration:
 
 ```bash
-python scripts/zones/validate_zones_config.py
+python scripts/validation/zones/validate_zones_config.py
 ```
 
 To test how detections are assigned to zones:
 
 ```bash
-python scripts/zones/test_zone_assignment_on_detections.py
+python scripts/validation/zones/test_zone_assignment_on_detections.py
 ```
 
-**10. Run YOLO detection**
-
-Run the detection pipeline using the configured `videos_index.json`:
+To visualize the zone layout on the reference frames:
 
 ```bash
-python scripts/detection/run_detection.py --target-fps 2
+python scripts/validation/zones/visualize_zones.py
 ```
 
-To process only the first 60 seconds for testing:
+To generate the tracking preview video:
 
 ```bash
-python scripts/detection/run_detection.py --target-fps 2 --max-seconds 60
+python scripts/validation/tracking/visualize_tracking_video.py
 ```
 
-Detection results will be saved in:
+**12. Run the live pipeline**
 
-```text
-data/processed/detections/
+Run the real-time in-memory pipeline. The frame is read once, passed to the detector, then passed directly to the tracker, and each tracked person is cropped in RAM for the next RE-ID stage.
+
+```bash
+python scripts/live/run_live.py --source 0 --show
 ```
 
-**11. Build detection reports**
+Use a video file instead of a camera by passing its path to `--source`.
+
+To limit testing to a small number of frames:
+
+```bash
+python scripts/live/run_live.py --source 0 --max-frames 100 --show
+```
+
+This path keeps data in RAM. It does not write detector JSON between stages.
+
+**13. Offline detection pipeline**
+
+Run detection on recorded videos:
+
+```bash
+python scripts/offline/detection/run_detection.py
+```
+
+Run tracking from saved detection JSON:
+
+```bash
+python scripts/offline/tracking/run_tracking.py
+```
+
+Extract reference frames for zone annotation:
+
+```bash
+python scripts/offline/data/extract_reference_frames.py
+```
+
+Enrich detections with zones:
+
+```bash
+python scripts/offline/zones/enrich_detections_with_zones.py
+```
+
+Build detection reports:
 
 After running detection, generate the detection index and summary reports:
 
 ```bash
-python scripts/reports/build_detection_reports.py
+python scripts/offline/reports/build_detection_reports.py
 ```
 
 Reports will be saved in:
@@ -123,13 +204,10 @@ Reports will be saved in:
 data/metadata/detections/
 ```
 
-**12. Optional: generate zone-enriched detections**
-
-If needed for classification testing, generate detections with zone information:
+Build zone reports:
 
 ```bash
-python scripts/zones/enrich_detections_with_zones.py
-python scripts/reports/build_zone_reports.py
+python scripts/offline/reports/build_zone_reports.py
 ```
 
 Zone reports will be saved in:

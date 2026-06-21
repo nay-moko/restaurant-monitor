@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pandas as pd
 
-PROJECT_DIR = Path(__file__).resolve().parents[2]
+PROJECT_DIR = Path(__file__).resolve().parents[3]
 
 ZONED_DIR = PROJECT_DIR / "data" / "processed" / "detections_with_zones"
 METADATA_DIR = PROJECT_DIR / "data" / "metadata" / "zones"
@@ -49,7 +49,7 @@ def inspect_file(json_path: Path):
         "matched": matched,
         "unknown": unknown,
         "matched_rate": round(matched_rate, 4),
-        "zone_type_counts": zone_type_counts
+        "zone_type_counts": zone_type_counts,
     }
 
 
@@ -67,11 +67,13 @@ def main():
         record = inspect_file(file)
         summary.append(record)
 
-        index.append({
-            "camera_id": record["camera_id"],
-            "video_id": record["video_id"],
-            "detections_with_zones_path": record["file"]
-        })
+        index.append(
+            {
+                "camera_id": record["camera_id"],
+                "video_id": record["video_id"],
+                "detections_with_zones_path": record["file"],
+            }
+        )
 
         print(
             f"✅ {record['camera_id']}/{record['video_id']} | "

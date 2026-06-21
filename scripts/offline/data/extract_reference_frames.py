@@ -5,7 +5,7 @@ from pathlib import Path
 import cv2
 
 
-PROJECT_DIR = Path(__file__).resolve().parents[2]
+PROJECT_DIR = Path(__file__).resolve().parents[3]
 sys.path.append(str(PROJECT_DIR))
 
 VIDEOS_INDEX_PATH = PROJECT_DIR / "data" / "metadata" / "videos" / "videos_index.json"
@@ -64,11 +64,7 @@ def main():
         video_path = PROJECT_DIR / video["path"]
         output_path = OUTPUT_DIR / f"{camera_id}_reference.jpg"
 
-        extract_frame(
-            video_path=video_path,
-            output_path=output_path,
-            target_second=30
-        )
+        extract_frame(video_path=video_path, output_path=output_path, target_second=30)
 
 
 if __name__ == "__main__":

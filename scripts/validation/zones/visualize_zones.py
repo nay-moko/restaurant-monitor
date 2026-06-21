@@ -6,12 +6,13 @@ import cv2
 import numpy as np
 
 
-PROJECT_DIR = Path(__file__).resolve().parents[2]
+PROJECT_DIR = Path(__file__).resolve().parents[3]
 sys.path.append(str(PROJECT_DIR))
 
 ZONES_CONFIG_PATH = PROJECT_DIR / "config" / "zones_config.json"
 REFERENCE_FRAMES_DIR = PROJECT_DIR / "data" / "debug" / "zones" / "reference_frames"
 OUTPUT_DIR = PROJECT_DIR / "data" / "debug" / "zones" / "zones_preview"
+
 
 def draw_zones(camera_id: str, camera_config: dict):
     image_path = REFERENCE_FRAMES_DIR / f"{camera_id}_reference.jpg"
@@ -43,7 +44,7 @@ def draw_zones(camera_id: str, camera_config: dict):
             cv2.FONT_HERSHEY_SIMPLEX,
             0.7,
             (0, 255, 0),
-            2
+            2,
         )
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
