@@ -22,28 +22,27 @@ class LivePipeline:
 
         with open(self.config_path, "r", encoding="utf-8") as f:
             self.config = json.load(f)
-
+         
+         # it will bring the config from the json file and if it didnt find a value-
+         #-in a vaariable in the json then it will bring it from the constructor
         detector_config = self.config["detector"]
-
         self.detector = PersonDetector(
-            model_name=detector_config.get("model", "models/yolo/yolov8n.pt"),
-            conf_threshold=detector_config.get("conf_threshold", 0.4),
-            imgsz=detector_config.get("imgsz", 480),
-            min_box_width=detector_config.get("min_box_width", 20),
-            min_box_height=detector_config.get("min_box_height", 20),
-            device=detector_config.get("device", None),
-        )
-        self.tracker = RestaurantTracker()
+            model_name=detector_config.get("model"),
+            conf_threshold=detector_config.get("conf_threshold"),
+            imgsz=detector_config.get("imgsz"),
+            min_box_width=detector_config.get("min_box_width"),
+            min_box_height=detector_config.get("min_box_height"),
+            device=detector_config.get("device"),
+                                     )
+        tracker_config = self.config.get("tracker", {})
+        self.tracker = RestaurantTracker(
+         max_age=tracker_config.get("max_age"),
+         n_init=tracker_config.get("n_init"),
+         nms_max_overlap=tracker_config.get("nms_max_overlap")
+)
         self.zone_manager = ZoneManager()
 
-    def process_frame(
-        self,
-        frame,
-        camera_id: str,
-        video_id: str,
-        frame_index: int,
-        time_seconds: float | None,
-    ) -> dict[str, Any]:
+    def process_frame(self,frame,camera_id: str,video_id: str,frame_index: int,time_seconds: float | None,) -> dict[str, Any]:
         detections = self.detector.detect(frame)
         tracked_objects = self.tracker.update(detections, frame=frame)
         tracked_objects = self.enrich_tracks_with_zones(camera_id, tracked_objects)
@@ -59,18 +58,14 @@ class LivePipeline:
             "person_crops": person_crops,
         }
 
-    def enrich_tracks_with_zones(
-        self,
-        camera_id: str,
-        tracked_objects: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
+    def enrich_tracks_with_zones(self,camera_id: str,tracked_objects: list[dict[str, Any]],) -> list[dict[str, Any]]:
         enriched_tracks: list[dict[str, Any]] = []
 
         for obj in tracked_objects:
             zone = self.zone_manager.get_bbox_zone(
                 camera_id=camera_id,
                 box=obj.get("box", [0, 0, 0, 0]),
-            )
+                                                   )
             enriched_obj = dict(obj)
             enriched_obj["zone"] = zone
             enriched_tracks.append(enriched_obj)
@@ -78,32 +73,39 @@ class LivePipeline:
         return enriched_tracks
 
     def crop_persons(self, frame, tracked_objects: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        crops: list[dict[str, Any]] = []
+     crops: list[dict[str, Any]] = []
+     
+    # جلب أبعاد الفريم مرة واحدة خارج الحلقة لتوفير الجهد المعالج
+     height, width = frame.shape[:2]
 
-        for obj in tracked_objects:
-            box = obj.get("box", [0, 0, 0, 0])
-            x1, y1, x2, y2 = [int(value) for value in box]
-            height, width = frame.shape[:2]
+     for obj in tracked_objects:
+        box = obj.get("box", [0, 0, 0, 0])
+        x1, y1, x2, y2 = [int(value) for value in box]
 
-            x1 = max(0, min(width - 1, x1))
-            x2 = max(0, min(width, x2))
-            y1 = max(0, min(height - 1, y1))
-            y2 = max(0, min(height, y2))
+        # 💡 تصحيح فحص الحدود الاحترافي (بين صفر وعرض/ارتفاع الصورة بالكامل)
+        x1 = max(0, min(width, x1))
+        x2 = max(0, min(width, x2))
+        y1 = max(0, min(height, y1))
+        y2 = max(0, min(height, y2))
 
-            crop = frame[y1:y2, x1:x2].copy()
-            if crop.size == 0:
-                continue
+        # أخذ لقطة مرجعية سريعة بدون حجز ذاكرة إضافية أولاً
+        crop = frame[y1:y2, x1:x2]
+        
+        # حماية من الصناديق الفارغة أو المنهارة
+        if crop.size == 0 or x1 >= x2 or y1 >= y2:
+            continue
 
-            crops.append(
-                {
-                    "track_id": obj.get("track_id"),
-                    "zone": obj.get("zone", {}),
-                    "box": [x1, y1, x2, y2],
-                    "crop": crop,
-                }
-            )
+        crops.append(
+            {
+                "track_id": obj.get("track_id"),
+                "zone": obj.get("zone", {}),
+                "box": [x1, y1, x2, y2],
+                # 💎 نقوم بعمل نسخة حقيقية فقط هنا بعد التأكد من سلامة اللقطة
+                "crop": crop.copy(), 
+            }
+        )
 
-        return crops
+     return crops
 
     def draw_zones(self, frame, camera_id: str) -> None:
         camera_zones = self.zone_manager.zones_config.get(camera_id, {}).get("zones", [])

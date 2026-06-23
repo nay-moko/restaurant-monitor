@@ -4,19 +4,28 @@ import numpy as np
 from deep_sort_realtime.deepsort_tracker import DeepSort
 
 class RestaurantTracker:
-    def __init__(self, max_age=5, n_init=1, nms_max_overlap=0.8):
-        # إعدادات متوافقة مع الـ 2 FPS
+    def __init__(
+        self, 
+        max_age: int | None = None, 
+        n_init: int | None = None, 
+        nms_max_overlap: float | None = None
+    ):
+        # 💡 هنا نحدد قيم الأمان المركزية والوحيدة في الكود (Single Source of Truth)
+        self.max_age = max_age if max_age is not None else 5
+        self.n_init = n_init if n_init is not None else 1
+        self.nms_max_overlap = nms_max_overlap if nms_max_overlap is not None else 0.8
+
+        # إعدادات متوافقة مع الـ 2 FPS ومحمية داخلياً
         self.tracker = DeepSort(
-            max_age=max_age,
-            n_init=n_init,
-            nms_max_overlap=nms_max_overlap,
+            max_age=self.max_age,
+            n_init=self.n_init,
+            nms_max_overlap=self.nms_max_overlap,
             embedder="mobilenet",
             half=True,
             max_cosine_distance=0.4
         )
 
     def update(self, detections, frame=None):
-        # جعلنا frame=None افتراضياً كخط دفاع لو الفيديو مش موجود
         raw_deepsort_detections = []
         
         for det in detections:

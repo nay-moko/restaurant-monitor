@@ -1,34 +1,36 @@
 {
     "project": {
-        "name": "restaurant-monitor"
+        "name": "restaurant-monitor",
+        "version": "2.0-live"
     },
-    "detector": {
-        "model": "models/yolo/yolov8n.pt",
-        "conf_threshold": 0.4,
-        "imgsz": 480,
-        "min_box_width": 20,
-        "min_box_height": 20,
-        "target_fps": 2,
-        "max_seconds": null,
+    "pipeline": {
+        "process_fps": 2,
         "device": null
     },
+    "detector": {
+        "model": "models/yolo/YOLOv8m.pt",
+        "conf_threshold": 0.1,
+        "imgsz": 640,
+        "min_box_width": 20,
+        "min_box_height": 20
+    },
+    "tracker": {
+        "max_age": 5,
+        "n_init": 1,
+        "nms_max_overlap": 0.8,
+        "max_cosine_distance": 0.4
+    },
     "paths": {
-    "videos_index": "data/metadata/videos/videos_index.json",
-    "detections_dir": "data/processed/detections",
-    "tracking_dir": "data/processed/tracking",
-    "classifications_dir": "data/processed/classifications",
-    "worker_assignments_dir": "data/processed/worker_assignments",
-    "outputs_dir": "data/artifacts/outputs",
-    "embeddings_dir": "data/artifacts/reid_embeddings",
-    "debug_detection_frames_dir": "data/debug/detection/frames",
-    "debug_detection_videos_dir": "data/debug/detection/videos",
-    "debug_zones_reference_frames_dir": "data/debug/zones/reference_frames",
-    "debug_zones_preview_dir": "data/debug/zones/zones_preview",
-    "debug_zones_unknown_points_dir": "data/debug/zones/unknown_points"
-},
+        "videos_index": "data/metadata/videos/videos_index.json",
+        "zones_config": "config/zones_config.json",
+        "outputs_dir": "data/artifacts/outputs",
+        "embeddings_dir": "data/artifacts/reid_embeddings",
+        "debug_crops_dir": "data/debug/crops",
+        "debug_zones_reference_frames_dir": "data/debug/zones/reference_frames",
+        "debug_zones_preview_dir": "data/debug/zones/zones_preview"
+    },
     "debug": {
-        "save_debug_frames": false,
-        "max_debug_frames": 30,
-        "save_debug_video": false
-        }
+        "show_live_view": true,
+        "save_debug_crops": false
     }
+}

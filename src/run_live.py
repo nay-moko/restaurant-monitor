@@ -20,8 +20,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--first-video", action="store_true", help="Use the first recorded video from videos_index.json")
     parser.add_argument("--videos-index", default="data/metadata/videos/videos_index.json", help="Path to videos_index.json")
     parser.add_argument("--config", default="config/config.json", help="Project config path")
-    parser.add_argument("--max-frames", type=int, default=None, help="Optional frame limit for testing")
-    parser.add_argument("--save-crops-dir", default=None, help="Optional directory to save person crops for RE-ID prep")
+    parser.add_argument("--max-frames", type=int, default=100, help="Optional frame limit for testing")
+    parser.add_argument("--save-crops-dir", default="data/debug/crops", help="Optional directory to save person crops for RE-ID prep")
     parser.add_argument("--show", action="store_true", help="Show annotated frames in a window")
     return parser.parse_args()
 

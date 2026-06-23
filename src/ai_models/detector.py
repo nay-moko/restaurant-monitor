@@ -6,21 +6,22 @@ from ultralytics import YOLO
 class PersonDetector:
     def __init__(
         self,
-        model_name: str = "yolov8n.pt",
-        conf_threshold: float = 0.4,
-        imgsz: int = 480,
-        min_box_width: int = 20,
-        min_box_height: int = 20,
+        model_name: str | None = None,
+        conf_threshold: float | None = None,
+        imgsz: int | None = None,
+        min_box_width: int | None = None,
+        min_box_height: int | None = None,
         device: str | None = None,
     ):
-        self.model_name = model_name
-        self.conf_threshold = conf_threshold
-        self.imgsz = imgsz
-        self.min_box_width = min_box_width
-        self.min_box_height = min_box_height
+        # (Single Source of Truth)
+        self.model_name = model_name or "models/yolo/yolov8n.pt"
+        self.conf_threshold = conf_threshold if conf_threshold is not None else 0.4
+        self.imgsz = imgsz if imgsz is not None else 480
+        self.min_box_width = min_box_width if min_box_width is not None else 20
+        self.min_box_height = min_box_height if min_box_height is not None else 20
         self.device = device
 
-        self.model = YOLO(model_name)
+        self.model = YOLO(self.model_name)
 
     def detect(self, frame: np.ndarray) -> list[dict[str, Any]]:
 
