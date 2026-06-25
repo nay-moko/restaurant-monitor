@@ -64,3 +64,40 @@ class PersonDetector:
                 )
 
         return detections
+    
+    def detect_with_pose(self, frame: np.ndarray) -> tuple[list[dict], list[np.ndarray] | None]:
+        predict_kwargs = {
+            "source": frame,
+            "conf": self.conf_threshold,
+            "imgsz": self.imgsz,
+            "classes": [0],
+            "verbose": False,
+        }
+        if self.device is not None:
+            predict_kwargs["device"] = self.device
+
+        results = self.model.predict(**predict_kwargs)
+
+        detections = []
+        keypoints_list = []  # parallel to detections
+
+        for result in results:
+            kpts_data = result.keypoints.data.cpu().numpy() if result.keypoints is not None else None
+
+            for i, box in enumerate(result.boxes):
+                x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+                conf = float(box.conf[0])
+
+                if (x2 - x1) < self.min_box_width or (y2 - y1) < self.min_box_height:
+                    continue
+
+                detections.append({
+                    "track_id": None,
+                    "box": [x1, y1, x2, y2],
+                    "conf": round(conf, 4),
+                    "class_id": 0,
+                    "class_name": "person",
+                })
+                keypoints_list.append(kpts_data[i] if kpts_data is not None else None)
+
+        return detections, keypoints_list

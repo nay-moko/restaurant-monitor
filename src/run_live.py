@@ -23,6 +23,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-frames", type=int, default=100, help="Optional frame limit for testing")
     parser.add_argument("--save-crops-dir", default="data/debug/crops", help="Optional directory to save person crops for RE-ID prep")
     parser.add_argument("--show", action="store_true", help="Show annotated frames in a window")
+    parser.add_argument("--start-sec", type=float, default=None, help="Start processing from a specific time in seconds (e.g. 532)")
+    parser.add_argument("--save-debug", action="store_true", help="Save crops and pose dataset to disk")
     return parser.parse_args()
 
 
@@ -63,27 +65,39 @@ def main() -> None:
     if not capture.isOpened():
         raise ValueError(f"Cannot open video source: {source}")
 
-    crop_dir = Path(args.save_crops_dir) if args.save_crops_dir else None
+    fps = capture.get(cv2.CAP_PROP_FPS)
+    pose_stride = max(1, round(fps / 3)) if fps and fps > 0 else 10
+    frame_index = 0
+    if args.start_sec is not None and fps and fps > 0:
+        frame_index = int(args.start_sec * fps)
+        capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+        print(f"Seeked to {args.start_sec}s (Frame: {frame_index})")
+
+    crop_dir = Path(args.save_crops_dir) if args.save_debug else None
     if crop_dir is not None:
         crop_dir.mkdir(parents=True, exist_ok=True)
+    if args.save_debug:
+        pipeline.save_pose_dataset("data/debug/classification/samples/raw_poses.json")
 
-    frame_index = 0
+    # We change the loop condition since frame_index might not start at 0
+    # max_frames should mean "process max N frames from the start point"
+    frames_processed = 0
     try:
         while True:
-            if args.max_frames is not None and frame_index >= args.max_frames:
+            if args.max_frames is not None and frames_processed >= args.max_frames:
                 break
 
             ret, frame = capture.read()
             if not ret:
                 break
 
-            fps = capture.get(cv2.CAP_PROP_FPS)
             time_seconds = frame_index / fps if fps and fps > 0 else None
 
             event = pipeline.process_frame(
                 frame=frame,
                 camera_id=camera_id,
                 video_id=video_id,
+                pose_stride=pose_stride,
                 frame_index=frame_index,
                 time_seconds=time_seconds,
             )
@@ -94,6 +108,8 @@ def main() -> None:
             if crop_dir is not None:
                 for crop_item in event["person_crops"]:
                     track_id = crop_item.get("track_id", "unknown")
+                    # Draw a visual identifier or the skeleton if we wanted directly on the crop, 
+                    # but storing the raw crop synchronously is handled here:
                     crop_path = crop_dir / f"{camera_id}_{video_id}_frame_{frame_index:06d}_track_{track_id}.jpg"
                     cv2.imwrite(str(crop_path), crop_item["crop"])
 
@@ -103,9 +119,12 @@ def main() -> None:
                     break
 
             frame_index += 1
+            frames_processed += 1
+            print(f"Frame {frames_processed}/{args.max_frames if args.max_frames else '?'} done")
     finally:
         capture.release()
         cv2.destroyAllWindows()
+        pipeline.save_pose_dataset("data/debug/classification/samples/raw_poses.json")
 
 
 if __name__ == "__main__":
