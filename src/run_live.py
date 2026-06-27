@@ -114,6 +114,7 @@ def main() -> None:
                     cv2.imwrite(str(crop_path), crop_item["crop"])
 
             if args.show:
+                cv2.namedWindow("Restaurant Live Pipeline", cv2.WINDOW_NORMAL)
                 cv2.imshow("Restaurant Live Pipeline", frame)
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     break

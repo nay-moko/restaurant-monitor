@@ -6,96 +6,119 @@
     },
     "zones": [
       {
-        "zone_id": "winter_tables_left",
+        "zone_id": "cam01_table_1",
         "zone_type": "table_area",
-        "zone_name": "Winter Tables Left",
+        "zone_name": "طاولة 1",
         "points": [
           [
-            974,
-            380
+            1069,
+            322
           ],
           [
-            298,
-            772
+            836,
+            563
           ],
           [
-            132,
-            243
+            661,
+            578
           ],
           [
-            554,
-            115
+            558,
+            638
+          ],
+          [
+            558,
+            885
+          ],
+          [
+            17,
+            1328
+          ],
+          [
+            11,
+            1400
+          ],
+          [
+            17,
+            1403
+          ],
+          [
+            49,
+            1429
+          ],
+          [
+            1066,
+            1434
+          ],
+          [
+            1247,
+            354
+          ],
+          [
+            1101,
+            267
           ]
         ]
       },
       {
-        "zone_id": "winter_service_path",
+        "zone_id": "cam01_table_2",
+        "zone_type": "table_area",
+        "zone_name": "طاولة 2",
+        "points": [
+          [
+            69,
+            549
+          ],
+          [
+            256,
+            770
+          ],
+          [
+            977,
+            351
+          ],
+          [
+            960,
+            267
+          ],
+          [
+            756,
+            190
+          ],
+          [
+            391,
+            279
+          ],
+          [
+            66,
+            400
+          ]
+        ]
+      },
+      {
+        "zone_id": "cam01_service_auto",
         "zone_type": "service_path",
-        "zone_name": "Winter Service Path",
+        "zone_name": "ممر خدمة (تلقائي)",
         "points": [
           [
-            952,
-            353
+            0,
+            0
           ],
           [
-            266,
-            666
+            1280,
+            0
           ],
           [
-            239,
-            1126
+            1280,
+            1440
           ],
           [
-            1040,
-            389
+            0,
+            1440
           ]
-        ]
-      },
-      {
-        "zone_id": "winter_tables_right",
-        "zone_type": "table_area",
-        "zone_name": "Winter Tables Right",
-        "points": [
-          [
-            1004,
-            346
-          ],
-          [
-            221,
-            1067
-          ],
-          [
-            747,
-            1415
-          ],
-          [
-            1226,
-            494
-          ]
-        ]
-      },
-      {
-        "zone_id": "winter_front_area",
-        "zone_type": "open_area",
-        "zone_name": "Winter Front Area",
-        "points": [
-          [
-            80,
-            433
-          ],
-          [
-            430,
-            946
-          ],
-          [
-            35,
-            1330
-          ],
-          [
-            2,
-            518
-          ]
-        ]
+        ],
+        "auto_generated": true,
+        "excludes_tables": true
       }
     ]
   },
@@ -199,253 +222,6 @@
       }
     ]
   },
-  "camera_04": {
-    "image_size": {
-      "width": 1920,
-      "height": 1080
-    },
-    "zones": [
-      {
-        "zone_id": "cashier_full",
-        "zone_type": "staff_area",
-        "zone_name": "Cashier Area",
-        "points": [
-          [
-            0,
-            0
-          ],
-          [
-            1920,
-            0
-          ],
-          [
-            1920,
-            1080
-          ],
-          [
-            0,
-            1080
-          ]
-        ]
-      },
-      {
-        "zone_id": "cashier_counter",
-        "zone_type": "cashier",
-        "zone_name": "Cashier Counter",
-        "points": [
-          [
-            1095,
-            30
-          ],
-          [
-            183,
-            785
-          ],
-          [
-            1747,
-            1073
-          ],
-          [
-            1766,
-            309
-          ]
-        ]
-      },
-      {
-        "zone_id": "cashier_staff_area",
-        "zone_type": "staff_area",
-        "zone_name": "Cashier Staff Area",
-        "points": [
-          [
-            311,
-            16
-          ],
-          [
-            109,
-            220
-          ],
-          [
-            492,
-            484
-          ],
-          [
-            927,
-            145
-          ]
-        ]
-      },
-      {
-        "zone_id": "cashier_service_path",
-        "zone_type": "service_path",
-        "zone_name": "Cashier Service Path",
-        "points": [
-          [
-            1630,
-            78
-          ],
-          [
-            1737,
-            111
-          ],
-          [
-            1708,
-            368
-          ],
-          [
-            1404,
-            325
-          ]
-        ]
-      }
-    ]
-  },
-  "camera_06": {
-    "image_size": {
-      "width": 1920,
-      "height": 1080
-    },
-    "zones": [
-      {
-        "zone_id": "bathroom_entrance_full",
-        "zone_type": "mixed_area",
-        "zone_name": "Bathroom Entrance",
-        "points": [
-          [
-            0,
-            0
-          ],
-          [
-            1920,
-            0
-          ],
-          [
-            1920,
-            1080
-          ],
-          [
-            0,
-            1080
-          ]
-        ]
-      },
-      {
-        "zone_id": "bathroom_entrance",
-        "zone_type": "bathroom_entrance",
-        "zone_name": "Bathroom Entrance",
-        "points": [
-          [
-            331,
-            13
-          ],
-          [
-            480,
-            28
-          ],
-          [
-            490,
-            399
-          ],
-          [
-            336,
-            326
-          ],
-          [
-            83,
-            1
-          ],
-          [
-            187,
-            419
-          ],
-          [
-            52,
-            545
-          ],
-          [
-            5,
-            175
-          ]
-        ]
-      },
-      {
-        "zone_id": "bathroom_corridor",
-        "zone_type": "corridor",
-        "zone_name": "Bathroom Corridor",
-        "points": [
-          [
-            342,
-            384
-          ],
-          [
-            785,
-            711
-          ],
-          [
-            529,
-            1071
-          ],
-          [
-            8,
-            730
-          ]
-        ]
-      }
-    ]
-  },
-  "camera_07": {
-    "image_size": {
-      "width": 1920,
-      "height": 1080
-    },
-    "zones": [
-      {
-        "zone_id": "buffet_full",
-        "zone_type": "staff_area",
-        "zone_name": "Buffet Area",
-        "points": [
-          [
-            0,
-            0
-          ],
-          [
-            1920,
-            0
-          ],
-          [
-            1920,
-            1080
-          ],
-          [
-            0,
-            1080
-          ]
-        ]
-      },
-      {
-        "zone_id": "buffet_counter",
-        "zone_type": "buffet",
-        "zone_name": "Buffet Counter",
-        "points": [
-          [
-            1738,
-            351
-          ],
-          [
-            1581,
-            972
-          ],
-          [
-            87,
-            412
-          ],
-          [
-            105,
-            211
-          ]
-        ]
-      }
-    ]
-  },
   "camera_11": {
     "image_size": {
       "width": 1920,
@@ -499,6 +275,13 @@
         ]
       }
     ]
+  },
+  "camera_12": {
+    "image_size": {
+      "width": 1920,
+      "height": 1080
+    },
+    "zones": []
   },
   "camera_13": {
     "image_size": {
@@ -576,6 +359,13 @@
         ]
       }
     ]
+  },
+  "camera_14": {
+    "image_size": {
+      "width": 1920,
+      "height": 1080
+    },
+    "zones": []
   },
   "camera_15": {
     "image_size": {
