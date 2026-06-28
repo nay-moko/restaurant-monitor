@@ -13,7 +13,7 @@ idle    : sitting or standing for more than 20 consecutive pose-frames
 Priority (salience): serving > working > idle
 """
 
-from experta import KnowledgeEngine, Fact, Field, Rule, AS, MATCH
+from experta import KnowledgeEngine, Fact, Field, Rule, AS, MATCH, TEST
 
 
 # ---------------------------------------------------------------------------
@@ -63,11 +63,11 @@ class WorkerKBS(KnowledgeEngine):
             zone_type="table",
             state=MATCH.current_state,
         ),
+        TEST(lambda current_state: current_state != "serving"),
         salience=30,
     )
     def set_state_serving(self, worker, current_state):
-        if current_state != "serving":
-            self.modify(worker, state="serving")
+        self.modify(worker, state="serving")
 
     # -- Working state (serving action, non-table zone) ----------------------
     # Serving anywhere outside a table zone still counts as working.
@@ -77,11 +77,11 @@ class WorkerKBS(KnowledgeEngine):
             action="serving",
             state=MATCH.current_state,
         ),
+        TEST(lambda current_state: current_state != "working"),
         salience=20,
     )
     def set_state_working_via_serving(self, worker, current_state):
-        if current_state != "working":
-            self.modify(worker, state="working")
+        self.modify(worker, state="working")
 
     # -- Working state (walking in customer-facing camera) -------------------
 
@@ -91,11 +91,11 @@ class WorkerKBS(KnowledgeEngine):
             camera_type="customer_facing",
             state=MATCH.current_state,
         ),
+        TEST(lambda current_state: current_state != "working"),
         salience=20,
     )
     def set_state_working_via_walking(self, worker, current_state):
-        if current_state != "working":
-            self.modify(worker, state="working")
+        self.modify(worker, state="working")
 
     # -- Idle state ----------------------------------------------------------
     # sitting or standing for more than 20 consecutive pose-frames.
@@ -108,16 +108,11 @@ class WorkerKBS(KnowledgeEngine):
             state=MATCH.current_state,
             re_id_ready=True,
         ),
+        TEST(lambda action, count, current_state: action in ("sitting", "standing") and count > 20 and current_state != "idle"),
         salience=10,
     )
-    def set_state_idle(self, worker, action, count, current_state):
-        if action in ("sitting", "standing") and count > 20:
-            if current_state != "idle":
-                self.modify(worker, state="idle")
-
-    # -- Idle state (per-camera fallback, no Re-ID) --------------------------
-    # Same logic but without the re_id_ready requirement.
-    # Lower salience so global rule wins when Re-ID is available.
+    def set_state_idle(self, worker, **kwargs):
+        self.modify(worker, state="idle")
 
     @Rule(
         AS.worker << WorkerFact(
@@ -126,9 +121,8 @@ class WorkerKBS(KnowledgeEngine):
             state=MATCH.current_state,
             re_id_ready=False,
         ),
+        TEST(lambda action, count, current_state: action in ("sitting", "standing") and count > 20 and current_state != "idle"),
         salience=5,
     )
-    def set_state_idle_local(self, worker, action, count, current_state):
-        if action in ("sitting", "standing") and count > 20:
-            if current_state != "idle":
-                self.modify(worker, state="idle")
+    def set_state_idle_local(self, worker, **kwargs):
+        self.modify(worker, state="idle")

@@ -61,12 +61,11 @@ class ActionKBS(KnowledgeEngine):
             zone_type="table",
             pose_frame_count=MATCH.count,
         ),
-        TEST(lambda count: count > 6),
+        TEST(lambda count: count > 3),
         salience=10,
-        
     )
     def promote_to_customer(self, person, count):
-            self.modify(person, role="customer")
+        self.modify(person, role="customer")
 
     # -- Promote to Worker via serving (Re-ID NOT required) ------------------
     # Rule: serving action for more than 6 consecutive pose-frames (any zone)
@@ -77,7 +76,7 @@ class ActionKBS(KnowledgeEngine):
             action="serving",
             pose_frame_count=MATCH.count,
         ),
-        TEST(lambda count: count > 6),
+        TEST(lambda count: count > 3),
         salience=10,
     )
     def promote_to_worker_via_serving(self, person, count):

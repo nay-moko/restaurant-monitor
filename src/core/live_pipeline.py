@@ -91,21 +91,17 @@ class LivePipeline:
         # -- Pose buffers ---------------------------------------------------
         self._kp_buffer:    dict[int, list] = {}  # track_id -> [(frame_id, kp_dict)]
         self._action_labels: dict[int, str] = {}  # track_id -> latest label
-        self._pose_samples:  list[dict]     = []
 
         # -- Zone manager ---------------------------------------------------
         self.zone_manager = ZoneManager()
 
         # -- KBS engines (instantiated once, reset each frame) --------------
         self.action_kbs   = ActionKBS()
-        self.worker_kbs   = WorkerKBS()
-        self.table_kbs    = TableKBS()
+        # self.worker_kbs   = WorkerKBS()
+        # self.table_kbs    = TableKBS()
         self.reid_gallery = ReIDGallery()
 
-        # Call reset() once here so the engines are in a clean state
-        self.action_kbs.reset()
-        self.worker_kbs.reset()
-        self.table_kbs.reset()
+        # KBS engines are re-instantiated each cycle in _run_kbs to avoid Experta lru_cache deadlock
 
         # -- Per-track state ------------------------------------------------
         self._person_roles:        dict[int, str]   = {}  # track_id -> role
@@ -244,23 +240,19 @@ class LivePipeline:
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2,
             )
 
-    def save_pose_dataset(self, output_path: str) -> None:
-        import os
-        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+            cv2.putText(
+                frame, f"id:{track_id}",
+                (x1 + 4, y1 + 18),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2,
+            )
 
-        existing = []
-        if os.path.exists(output_path):
-            with open(output_path, "r") as f:
-                existing = json.load(f)
-
-        combined = existing + self._pose_samples
-        with open(output_path, "w") as f:
-            json.dump(combined, f, indent=2)
-
-        print(
-            f"Saved {len(self._pose_samples)} new samples "
-            f"(total: {len(combined)}) → {output_path}"
-        )
+            if gid:
+                gid_short = gid.replace("worker_", "")
+                cv2.putText(
+                    frame, f"gid:{gid_short}",
+                    (x1 + 4, y1 + 38),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180, 105, 255), 2,
+                )
 
     # -----------------------------------------------------------------------
     # Private helpers
@@ -296,14 +288,6 @@ class LivePipeline:
 
             self._predict_action(track_id, frame_index, kp_dict)
 
-            self._pose_samples.append({
-                "vid_id":            video_id,
-                "frame_id":          frame_index,
-                "tracked_person_id": track_id,
-                "keypoints":         kp_dict,
-                "label":             "",
-            })
-
     def _match_to_track(self, pose_box, tracked_objects) -> int | None:
         best_iou, best_id = 0.0, None
         px1, py1, px2, py2 = pose_box
@@ -329,13 +313,13 @@ class LivePipeline:
         buf.append((frame_id, kp_dict))
 
         # Drop frames with large gaps
-        while len(buf) > 1 and buf[-1][0] - buf[-2][0] >= 10:
+        while len(buf) > 1 and buf[-1][0] - buf[-2][0] >= 200:
             buf.pop(0)
 
-        if len(buf) > 6:
+        if len(buf) > 3:
             buf.pop(0)
 
-        if len(buf) < 6:
+        if len(buf) < 3:
             return
 
         def normalize_kp(kp):
@@ -361,8 +345,8 @@ class LivePipeline:
             kp = normalize_kp(kp)
             return [v for pt in kp.values() for v in (pt["x"], pt["y"], pt["conf"])]
 
-        x = np.array([flatten(buf[i][1]) for i in range(6)], dtype=np.float32)
-        x = torch.tensor(x).unsqueeze(0)  # (1, 6, 51)
+        x = np.array([flatten(buf[i][1]) for i in range(3)], dtype=np.float32)
+        x = torch.tensor(x).unsqueeze(0)  # (1, 3, 51)
 
         with torch.no_grad():
             pred = self.action_model(x).argmax(1).item()
@@ -389,8 +373,27 @@ class LivePipeline:
             else:
                 self._action_frame_counts[tid] = self._action_frame_counts.get(tid, 0) + 1
 
+        # -- Re-ID pre-check: match unknowns against existing gallery --------
+        active_gids = set(self._global_ids.values())
+        for obj in tracked_objects:
+            tid  = obj["track_id"]
+            role = self._person_roles.get(tid, "unknown")
+            if role != "unknown" or tid in self._global_ids:
+                continue
+            crop = crop_by_id.get(tid)
+            if crop is None:
+                continue
+            embedding   = self.reid_gallery._extract(crop)
+            matched_gid = self.reid_gallery._match(embedding)
+            if matched_gid is not None and matched_gid not in active_gids:
+                self._person_roles[tid] = "worker"
+                self._global_ids[tid]   = matched_gid
+                active_gids.add(matched_gid)
+                print(f"[ReID] track {tid} matched existing gallery → {matched_gid}")
+
         # -- ActionKBS: classify unknowns -----------------------------------
-        self.action_kbs.reset()  # ← proper reset before declaring facts
+        self.action_kbs = ActionKBS()
+        self.action_kbs.reset()
         for obj in tracked_objects:
             tid  = obj["track_id"]
             role = self._person_roles.get(tid, "unknown")
@@ -454,43 +457,45 @@ class LivePipeline:
             ):
                 self._table_was_served[zone_id] = True
 
-        # -- TableKBS -------------------------------------------------------
-        all_zone_ids = (
-            set(zone_customer_counts)
-            | set(self._table_customer_counts)
-            | set(self._table_was_served)
-        )
+        # # -- TableKBS -------------------------------------------------------
+        # all_zone_ids = (
+        #     set(zone_customer_counts)
+        #     | set(self._table_customer_counts)
+        #     | set(self._table_was_served)
+        # )
 
-        self.table_kbs.reset()  # ← proper reset before declaring facts
-        for zone_id in all_zone_ids:
-            self.table_kbs.declare(TableFact(
-                zone_id        = zone_id,
-                customer_count = zone_customer_counts.get(zone_id, 0),
-                was_served     = self._table_was_served.get(zone_id, False),
-            ))
-        self.table_kbs.run()
-        self._table_customer_counts = zone_customer_counts
+        # self.table_kbs = TableKBS()
+        # self.table_kbs.reset()
+        # for zone_id in all_zone_ids:
+        #     self.table_kbs.declare(TableFact(
+        #         zone_id        = zone_id,
+        #         customer_count = zone_customer_counts.get(zone_id, 0),
+        #         was_served     = self._table_was_served.get(zone_id, False),
+        #     ))
+        # self.table_kbs.run()
+        # self._table_customer_counts = zone_customer_counts
 
-        # -- WorkerKBS ------------------------------------------------------
-        self.worker_kbs.reset()  # ← proper reset before declaring facts
-        for obj in tracked_objects:
-            tid  = obj["track_id"]
-            role = self._person_roles.get(tid, "unknown")
-            if role != "worker":
-                continue
-            global_id = self._global_ids.get(tid, f"local_{tid}")
-            self.worker_kbs.declare(WorkerFact(
-                global_id        = global_id,
-                action           = self._action_labels.get(tid, "unknown"),
-                zone_type        = obj.get("zone_type_normalized", "unknown"),
-                camera_type      = "customer_facing",
-                pose_frame_count = self._action_frame_counts.get(tid, 0),
-                re_id_ready      = False,
-            ))
-        self.worker_kbs.run()
+        # # -- WorkerKBS ------------------------------------------------------
+        # self.worker_kbs = WorkerKBS()
+        # self.worker_kbs.reset()
+        # for obj in tracked_objects:
+        #     tid  = obj["track_id"]
+        #     role = self._person_roles.get(tid, "unknown")
+        #     if role != "worker":
+        #         continue
+        #     global_id = self._global_ids.get(tid, f"local_{tid}")
+        #     self.worker_kbs.declare(WorkerFact(
+        #         global_id        = global_id,
+        #         action           = self._action_labels.get(tid, "unknown"),
+        #         zone_type        = obj.get("zone_type_normalized", "unknown"),
+        #         camera_type      = "customer_facing",
+        #         pose_frame_count = self._action_frame_counts.get(tid, 0),
+        #         re_id_ready      = False,
+        #     ))
+        # self.worker_kbs.run()
 
-        # -- Read WorkerKBS results -----------------------------------------
-        for fact in self.worker_kbs.facts.values():
-            if not isinstance(fact, WorkerFact):
-                continue
-            self._worker_states[fact["global_id"]] = fact["state"]
+        # # -- Read WorkerKBS results -----------------------------------------
+        # for fact in self.worker_kbs.facts.values():
+        #     if not isinstance(fact, WorkerFact):
+        #         continue
+        #     self._worker_states[fact["global_id"]] = fact["state"]

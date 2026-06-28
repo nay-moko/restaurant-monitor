@@ -19,14 +19,13 @@ class ZoneManager:
     def get_bbox_zone(self, camera_id: str, box: list[int | float]) -> dict[str, Any]:
         x1, y1, x2, y2 = box
 
-        bottom_center_x = (x1 + x2) / 2
-        bottom_center_y = y2
+        center_x = (x1 + x2) / 2
+        center_y = (y1 + y2) / 2
 
         return self.get_point_zone(
             camera_id=camera_id,
-            point=[bottom_center_x, bottom_center_y]
+            point=[center_x, center_y]
         )
-
     def get_point_zone(self, camera_id: str, point: list[int | float]) -> dict[str, Any]:
         camera_zones = self.zones_config.get(camera_id)
 

@@ -4,18 +4,18 @@
         "version": "2.0-live"
     },
     "pipeline": {
-        "process_fps": 3,
+        "process_fps": 2,
         "device": "cuda"
     },
     "detector": {
         "model": "models/yolo/yolov8n-pose.pt",
-        "conf_threshold": 0.15,
+        "conf_threshold": 0.25,
         "imgsz": 640,
         "min_box_width": 2,
         "min_box_height": 2
     },
     "tracker": {
-        "max_age": 30,
+        "max_age": 10,
         "n_init": 3,
         "nms_max_overlap": 0.3,
         "max_cosine_distance": 0.4

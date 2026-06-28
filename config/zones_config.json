@@ -129,94 +129,91 @@
     },
     "zones": [
       {
-        "zone_id": "winter_section_full",
-        "zone_type": "mixed_area",
-        "zone_name": "Winter Section Full View",
-        "points": [
-          [
-            0,
-            0
-          ],
-          [
-            1920,
-            0
-          ],
-          [
-            1920,
-            1080
-          ],
-          [
-            0,
-            1080
-          ]
-        ]
-      },
-      {
-        "zone_id": "winter_tables_area",
+        "zone_id": "cam02_table_1",
         "zone_type": "table_area",
-        "zone_name": "Winter Tables Right",
+        "zone_name": "طاولة 1",
         "points": [
           [
-            836,
-            187
-          ],
-          [
-            1420,
-            507
-          ],
-          [
-            1887,
-            316
-          ],
-          [
-            1291,
-            145
-          ]
-        ]
-      },
-      {
-        "zone_id": "winter_service_path",
-        "zone_type": "service_path",
-        "zone_name": "Winter Service Path",
-        "points": [
-          [
-            500,
-            242
-          ],
-          [
-            655,
+            427,
             216
           ],
           [
-            1482,
-            613
+            1919,
+            1076
           ],
           [
-            1206,
-            762
+            246,
+            1074
+          ],
+          [
+            144,
+            442
+          ],
+          [
+            157,
+            233
+          ],
+          [
+            401,
+            190
           ]
         ]
       },
       {
-        "zone_id": "winter_hallway",
-        "zone_type": "hallway",
-        "zone_name": "Winter Hallway",
+        "zone_id": "cam02_table_2",
+        "zone_type": "table_area",
+        "zone_name": "طاولة 2",
         "points": [
           [
-            1889,
-            385
+            664,
+            269
           ],
+          [
+            1485,
+            640
+          ],
+          [
+            1891,
+            448
+          ],
+          [
+            1873,
+            366
+          ],
+          [
+            992,
+            140
+          ],
+          [
+            625,
+            235
+          ]
+        ]
+      },
+      {
+        "zone_id": "cam02_service_1",
+        "zone_type": "service_path",
+        "zone_name": "ممر خدمة 1",
+        "points": [
           [
             1910,
-            592
+            438
           ],
           [
-            798,
-            925
+            1490,
+            638
           ],
           [
-            755,
-            829
+            524,
+            185
+          ],
+          [
+            418,
+            203
+          ],
+          [
+            1919,
+            1071
           ]
         ]
       }

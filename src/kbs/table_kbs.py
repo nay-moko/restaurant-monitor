@@ -18,7 +18,7 @@ This flag is cleared (reset to False) once the table returns to free
 AND has been cleaned (external signal, or timer — future work).
 """
 
-from experta import KnowledgeEngine, Fact, Field, Rule, AS, MATCH, NOT
+from experta import KnowledgeEngine, Fact, Field, Rule, AS, MATCH, TEST
 
 
 # ---------------------------------------------------------------------------
@@ -62,11 +62,11 @@ class TableKBS(KnowledgeEngine):
             was_served=False,
             state=MATCH.current_state,
         ),
+        TEST(lambda current_state: current_state != "free"),
         salience=10,
     )
     def set_state_free(self, table, current_state):
-        if current_state != "free":
-            self.modify(table, state="free")
+        self.modify(table, state="free")
 
     # -- Occupied ------------------------------------------------------------
     # At least 1 customer present and table has not been served yet.
@@ -77,11 +77,11 @@ class TableKBS(KnowledgeEngine):
             was_served=False,
             state=MATCH.current_state,
         ),
+        TEST(lambda count, current_state: count > 0 and current_state != "occupied"),
         salience=20,
     )
     def set_state_occupied(self, table, count, current_state):
-        if count > 0 and current_state != "occupied":
-            self.modify(table, state="occupied")
+        self.modify(table, state="occupied")
 
     # -- Occupied + served ---------------------------------------------------
     # Customers still present but table was already served.
@@ -93,11 +93,11 @@ class TableKBS(KnowledgeEngine):
             was_served=True,
             state=MATCH.current_state,
         ),
+        TEST(lambda count, current_state: count > 0 and current_state != "occupied"),
         salience=20,
     )
     def set_state_occupied_served(self, table, count, current_state):
-        if count > 0 and current_state != "occupied":
-            self.modify(table, state="occupied")
+        self.modify(table, state="occupied")
 
     # -- Dirty ---------------------------------------------------------------
     # No customers left but table was served → needs cleaning.
@@ -108,8 +108,8 @@ class TableKBS(KnowledgeEngine):
             was_served=True,
             state=MATCH.current_state,
         ),
+        TEST(lambda current_state: current_state != "dirty"),
         salience=30,
     )
     def set_state_dirty(self, table, current_state):
-        if current_state != "dirty":
-            self.modify(table, state="dirty")
+        self.modify(table, state="dirty")
