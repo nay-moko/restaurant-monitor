@@ -16,6 +16,9 @@ from src.kbs.action_kbs import ActionKBS, PersonFact
 from src.kbs.worker_kbs import WorkerKBS, WorkerFact
 from src.kbs.table_kbs import TableKBS, TableFact
 from src.kbs.reid_gallery import ReIDGallery
+from src.kbs.role_engine import (
+    RoleEngine, ObservationFact, ScoreAccumulator, MergeRequest, RoleDecision,
+)
 from src.core.classifiers import PoseLSTM
 
 
@@ -109,6 +112,9 @@ class LivePipeline:
         self._action_frame_counts: dict[int, int]   = {}  # track_id -> consecutive frames
         self._last_action_zone:    dict[int, tuple] = {}  # track_id -> (action, zone_type)
         self._worker_states:       dict[str, str]   = {}  # global_id -> worker state
+
+        # -- RoleEngine persistent state ------------------------------------
+        self._role_accumulators: dict[str, dict]  = {}  # global_id -> accumulator dict
 
         # -- Table state ----------------------------------------------------
         self._table_customer_counts: dict[str, int]  = {}  # zone_id -> count
@@ -391,41 +397,59 @@ class LivePipeline:
                 active_gids.add(matched_gid)
                 print(f"[ReID] track {tid} matched existing gallery → {matched_gid}")
 
-        # -- ActionKBS: classify unknowns -----------------------------------
-        self.action_kbs = ActionKBS()
-        self.action_kbs.reset()
-        for obj in tracked_objects:
-            tid  = obj["track_id"]
-            role = self._person_roles.get(tid, "unknown")
-            if role != "unknown":
-                continue  # already classified
+        # -- RoleEngine: classify all persons via point-based evidence ------
+        engine = RoleEngine()
+        engine.reset()
 
-            self.action_kbs.declare(PersonFact(
+        # Re-inject persistent accumulators from previous cycle
+        for gid, acc in self._role_accumulators.items():
+            engine.declare(ScoreAccumulator(
+                global_id=gid,
+                worker_score=acc["worker_score"],
+                customer_score=acc["customer_score"],
+                confirmed_role=acc["confirmed_role"],
+                cycle_count=acc["cycle_count"],
+            ))
+
+        # Declare one ObservationFact per tracked person
+        for obj in tracked_objects:
+            tid = obj["track_id"]
+            gid = self._global_ids.get(tid, f"local_{tid}")
+            engine.declare(ObservationFact(
                 track_id         = tid,
-                role             = "unknown",
+                global_id        = gid,
                 action           = self._action_labels.get(tid, "unknown"),
                 zone_type        = obj.get("zone_type_normalized", "unknown"),
                 pose_frame_count = self._action_frame_counts.get(tid, 0),
-                re_id_ready      = False,
+                appearance_count = 0,
+                previous_role    = self._person_roles.get(tid, "unknown"),
             ))
-        self.action_kbs.run()
 
-        # -- Read ActionKBS results, Re-ID promoted workers -----------------
-        for fact in self.action_kbs.facts.values():
-            if not isinstance(fact, PersonFact):
-                continue
-            tid  = fact["track_id"]
-            role = fact["role"]
-            if role == "unknown":
-                continue
+        engine.run()
 
-            self._person_roles[tid] = role
+        # Read RoleEngine decisions
+        for tid, decision in engine.get_decisions().items():
+            role = decision["role"]
+            if role != "unknown":
+                self._person_roles[tid] = role
+            # Log scores for debugging
+            print(
+                f"  [RoleEngine] track {tid}: "
+                f"role={decision['role']}  "
+                f"conf={decision['confidence']:.2f}  "
+                f"ws={decision['worker_score']:.1f}  "
+                f"cs={decision['customer_score']:.1f}"
+            )
 
+            # Re-ID: register newly confirmed workers in gallery
             if role == "worker" and tid not in self._global_ids:
                 crop = crop_by_id.get(tid)
                 if crop is not None:
                     global_id = self.reid_gallery.process(tid, crop)
                     self._global_ids[tid] = global_id
+
+        # Persist accumulators for next cycle
+        self._role_accumulators = engine.get_accumulators()
 
         # -- Update table customer counts -----------------------------------
         zone_customer_counts: dict[str, int] = {}
