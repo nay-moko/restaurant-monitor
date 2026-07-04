@@ -1,5 +1,6 @@
 from __future__ import annotations
-
+import collections.abc
+collections.Mapping = collections.abc.Mapping
 import argparse
 import json
 import sys

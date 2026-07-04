@@ -120,7 +120,7 @@ class LivePipeline:
         # -- Table state ----------------------------------------------------
         self._table_customer_counts: dict[str, int]  = {}  # zone_id -> count
         self._table_was_served:      dict[str, bool] = {}  # zone_id -> served flag
-
+        self.person_state: list[dict[str, Any]] = []
     # -----------------------------------------------------------------------
     # Public API
     # -----------------------------------------------------------------------
@@ -290,6 +290,46 @@ class LivePipeline:
     # -----------------------------------------------------------------------
     # Private helpers
     # -----------------------------------------------------------------------
+    def _update_person_state(self, global_id: str, local_id: int, zone_type: str):
+        """
+        تحديث قاعدة البيانات في الذاكرة (list of dicts) لكل شخص بناءً على الفريمات.
+        """
+        from datetime import datetime, timedelta
+
+        # 1. البحث عن السجل الحالي للشخص عبر الـ global_id
+        person_record = next((row for row in self.person_state if row["global_id"] == global_id), None)
+        
+        # 2. إذا كان الشخص يظهر لأول مرة في النظام تماماً
+        if person_record is None:
+            new_row = {
+                "global_id": global_id,
+                "local_id": local_id,
+                "current_location": zone_type, # يتم تخزين الزون الموحدة (table, walk, staff)
+                "Entrance date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "Duration": "00:00:00",
+                "_internal_frames_count": 1 # عداد الفريمات الداخلي للحساب الدقيق
+            }
+            self.person_state.append(new_row)
+            return
+
+        # 3. إذا كان الشخص موجوداً مسبقاً ولكن انتقل إلى زون جديدة
+        if person_record["current_location"] != zone_type:
+            person_record["current_location"] = zone_type
+            person_record["Entrance date"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            person_record["_internal_frames_count"] = 1
+            person_record["Duration"] = "00:00:00"
+            person_record["local_id"] = local_id # تحديث الـ local_id في حال تغير بفعل الـ DeepSORT
+        else:
+            # 4. الشخص لا يزال مستقراً في نفس المكان -> نزيد عداد الفريمات
+            person_record["_internal_frames_count"] += 1
+            person_record["local_id"] = local_id # نحدث الـ local_id باستمرار لضمان ربطه بالـ Bounding Box الحالي
+            
+            # حساب المدة الحقيقية: كل فريم يساوي نصف ثانية لأن النظام يعالج (2fps)
+            total_seconds = person_record["_internal_frames_count"] / 2.0
+            
+            # تحويل الثواني إلى صيغة وقت مقروءة ومطابقة لطلب المعيد (HH:MM:SS)
+            duration_timedelta = timedelta(seconds=int(total_seconds))
+            person_record["Duration"] = str(duration_timedelta) 
 
     def _extract_pose_from_detections(
         self,
@@ -564,7 +604,22 @@ class LivePipeline:
 
         # Persist accumulators for next cycle
         self._role_accumulators = engine.get_accumulators()
-
+        for obj in tracked_objects:
+            tid = obj["track_id"]
+            
+            # الحصول على الـ global_id الموحد المحسوب بواسطة الـ ReID والـ RoleEngine
+            # وإذا لم يكن مسجلاً بعد كعامل، نأخذ المعرف المؤقت المعتمد في كودكم [source: 1]
+            gid = self._global_ids.get(tid, f"local_{tid}") 
+            
+            # الحصول على اسم الزون الموحد الجاهز في الكود (table, walk, staff) [source: 1]
+            zone_type = obj.get("zone_type_normalized", "unknown") 
+            
+            # استدعاء دالة التحديث لبناء الـ list of dicts وحساب الـ duration
+            self._update_person_state(
+                global_id=gid,
+                local_id=tid,
+                zone_type=zone_type
+            )
         # -- Update table customer counts -----------------------------------
         zone_customer_counts: dict[str, int] = {}
         for obj in tracked_objects:
@@ -595,6 +650,11 @@ class LivePipeline:
             ):
                 self._table_was_served[zone_id] = True
 
+    # أضف هذا السطر في نهاية دالة _run_kbs للتحقق
+        print("\n=== LIVE DATABASE STATE ===")
+        for row in self.person_state:
+            print(f"ID: {row['global_id']} | Loc: {row['current_location']} | Entry: {row['Entrance date']} | Dur: {row['Duration']}")
+        print("===========================\n")      
         # # -- TableKBS -------------------------------------------------------
         # all_zone_ids = (
         #     set(zone_customer_counts)
