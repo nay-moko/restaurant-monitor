@@ -1,7 +1,7 @@
 from .action_kbs    import ActionKBS, PersonFact
 from .worker_kbs    import WorkerKBS, WorkerFact
 from .table_kbs     import TableKBS, TableFact
-from .reid_gallery  import ReIDGallery
+from .reid_gallery  import ReIDGallery, SessionGallery
 from .role_engine   import (
     RoleEngine,
     ObservationFact,
@@ -16,7 +16,7 @@ __all__ = [
     "ActionKBS", "PersonFact",
     "WorkerKBS", "WorkerFact",
     "TableKBS",  "TableFact",
-    "ReIDGallery",
+    "ReIDGallery", "SessionGallery",
     "RoleEngine",
     "ObservationFact",
     "ScoreAccumulator",

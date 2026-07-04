@@ -15,7 +15,7 @@ from src.zone_management.zone_manager import ZoneManager
 from src.kbs.action_kbs import ActionKBS, PersonFact
 from src.kbs.worker_kbs import WorkerKBS, WorkerFact
 from src.kbs.table_kbs import TableKBS, TableFact
-from src.kbs.reid_gallery import ReIDGallery
+from src.kbs.reid_gallery import ReIDGallery, SessionGallery
 from src.kbs.role_engine import (
     RoleEngine, ObservationFact, ScoreAccumulator, MergeRequest, RoleDecision,
 )
@@ -103,6 +103,7 @@ class LivePipeline:
         # self.worker_kbs   = WorkerKBS()
         # self.table_kbs    = TableKBS()
         self.reid_gallery = ReIDGallery()
+        self.session_gallery = SessionGallery(ttl_seconds=1800)  # 30 mins TTL
 
         # KBS engines are re-instantiated each cycle in _run_kbs to avoid Experta lru_cache deadlock
 
@@ -135,7 +136,12 @@ class LivePipeline:
     ):
         detections, keypoints_list = self.detector.detect_with_pose(frame)
         tracked_objects = self.tracker.update(detections, frame=frame)
-        tracked_objects = self.enrich_tracks_with_zones(camera_id, tracked_objects)
+        tracked_objects = self.enrich_tracks_with_zones(
+            camera_id,
+            tracked_objects,
+            detections,
+            keypoints_list,
+        )
         person_crops    = self.crop_persons(frame, tracked_objects)
 
         if pose_stride is None or frame_index % pose_stride == 0:
@@ -159,18 +165,41 @@ class LivePipeline:
         self,
         camera_id: str,
         tracked_objects: list[dict[str, Any]],
+        detections: list[dict[str, Any]] | None = None,
+        keypoints_list: list[np.ndarray] | None = None,
     ) -> list[dict[str, Any]]:
         enriched_tracks: list[dict[str, Any]] = []
 
+        pose_points_by_track_id: dict[int, list[int]] = {}
+        if detections and keypoints_list:
+            for det, kpts in zip(detections, keypoints_list):
+                if kpts is None:
+                    continue
+
+                track_id = self._match_to_track(det.get("box", [0, 0, 0, 0]), tracked_objects)
+                if track_id is None:
+                    continue
+
+                pose_points_by_track_id[track_id] = self._estimate_zone_point(det.get("box", [0, 0, 0, 0]), kpts)
+
         for obj in tracked_objects:
-            zone = self.zone_manager.get_bbox_zone(
+            track_id = obj.get("track_id")
+            box = obj.get("box", [0, 0, 0, 0])
+            zone_point = pose_points_by_track_id.get(track_id)
+
+            if zone_point is None:
+                zone_point = self._estimate_zone_point(box, None)
+
+            zone = self.zone_manager.get_point_zone(
                 camera_id=camera_id,
-                box=obj.get("box", [0, 0, 0, 0]),
+                point=zone_point,
             )
             enriched_obj = dict(obj)
             enriched_obj["zone"] = zone
             raw_zone_type = zone.get("zone_type", "unknown") if zone else "unknown"
             enriched_obj["zone_type_normalized"] = self.ZONE_TYPE_MAP.get(raw_zone_type, "unknown")
+            enriched_obj["zone_name"] = zone.get("zone_name", "Unknown") if zone else "Unknown"
+            enriched_obj["zone_point"] = zone_point
             enriched_tracks.append(enriched_obj)
 
         return enriched_tracks
@@ -227,19 +256,17 @@ class LivePipeline:
         for obj in tracked_objects:
             box = obj.get("box", [0, 0, 0, 0])
             x1, y1, x2, y2 = map(int, box)
-            track_id = obj.get("track_id", "?")
-
-            action  = self._action_labels.get(track_id, "...")
-            role    = self._person_roles.get(track_id, "unknown")
-            gid     = self._global_ids.get(track_id)
-            w_state = self._worker_states.get(gid, "") if gid else ""
-            color   = self.ROLE_COLORS.get(role, (255, 255, 255))
+            zone_type = obj.get("zone_type_normalized", "unknown")
+            zone_name = obj.get("zone_name", "Unknown")
+            track_id  = obj.get("track_id", "?")
+            action    = self._action_labels.get(track_id, "...")
+            role      = self._person_roles.get(track_id, "unknown")
+            gid       = self._global_ids.get(track_id)
+            color     = self.ROLE_COLORS.get(role, (255, 255, 255))
 
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
 
-            label = f"{action} | {role}"
-            if w_state:
-                label += f" | {w_state}"
+            label = f"{action} | {role} | {zone_type}"
             cv2.putText(
                 frame, label,
                 (x1, max(35, y1 - 8)),
@@ -293,6 +320,50 @@ class LivePipeline:
             }
 
             self._predict_action(track_id, frame_index, kp_dict)
+
+    def _estimate_zone_point(
+        self,
+        box: list[int | float],
+        kpts: np.ndarray | None,
+        conf_threshold: float = 0.25,
+    ) -> list[int]:
+        x1, y1, x2, y2 = [int(v) for v in box]
+
+        def visible_point(index: int) -> tuple[float, float] | None:
+            if kpts is None or index >= len(kpts):
+                return None
+            x, y, conf = kpts[index]
+            if float(conf) < conf_threshold:
+                return None
+            return float(x), float(y)
+
+        def average_visible_points(indices: tuple[int, ...]) -> list[int] | None:
+            points = [visible_point(index) for index in indices]
+            visible_points = [point for point in points if point is not None]
+            if visible_points:
+                avg_x = sum(point[0] for point in visible_points) / len(visible_points)
+                avg_y = sum(point[1] for point in visible_points) / len(visible_points)
+                return [int(round(avg_x)), int(round(avg_y))]
+            return None
+
+        # Explicit priority order:
+        # 1) ankles visible
+        # 2) hips visible
+        # 3) shoulders visible
+        # 4) upper body only -> use the box center
+        ankles_point = average_visible_points((15, 16))
+        if ankles_point is not None:
+            return ankles_point
+
+        hips_point = average_visible_points((11, 12))
+        if hips_point is not None:
+            return hips_point
+
+        shoulders_point = average_visible_points((5, 6))
+        if shoulders_point is not None:
+            return shoulders_point
+
+        return [int(round((x1 + x2) / 2)), int(round((y1 + y2) / 2))]
 
     def _match_to_track(self, pose_box, tracked_objects) -> int | None:
         best_iou, best_id = 0.0, None
@@ -380,22 +451,44 @@ class LivePipeline:
                 self._action_frame_counts[tid] = self._action_frame_counts.get(tid, 0) + 1
 
         # -- Re-ID pre-check: match unknowns against existing gallery --------
-        active_gids = set(self._global_ids.values())
+        self.session_gallery.purge_old()
+
         for obj in tracked_objects:
             tid  = obj["track_id"]
-            role = self._person_roles.get(tid, "unknown")
-            if role != "unknown" or tid in self._global_ids:
+            
+            # If we already linked this track ID in a previous frame to a session ID, just touch it
+            if tid in self._global_ids:
+                gid = self._global_ids[tid]
+                if gid.startswith("session_"):
+                    self.session_gallery.touch(gid)
                 continue
+
             crop = crop_by_id.get(tid)
             if crop is None:
                 continue
-            embedding   = self.reid_gallery._extract(crop)
-            matched_gid = self.reid_gallery._match(embedding)
-            if matched_gid is not None and matched_gid not in active_gids:
+                
+            embedding = self.reid_gallery._extract(crop)
+
+            # 1. Check permanent Worker Gallery
+            matched_worker = self.reid_gallery._match(embedding)
+            if matched_worker is not None:
                 self._person_roles[tid] = "worker"
-                self._global_ids[tid]   = matched_gid
-                active_gids.add(matched_gid)
-                print(f"[ReID] track {tid} matched existing gallery → {matched_gid}")
+                self._global_ids[tid]   = matched_worker
+                print(f"[ReID] track {tid} matched permanent worker → {matched_worker}")
+                continue
+
+            # 2. Check temporary Session Gallery
+            matched_session = self.session_gallery.match(embedding)
+            if matched_session is not None:
+                self._global_ids[tid] = matched_session
+                self.session_gallery.update_seen(matched_session, embedding)
+                print(f"[ReID] track {tid} matched active session → {matched_session}")
+                continue
+
+            # 3. New person: register in Session Gallery
+            new_session = self.session_gallery.register(embedding)
+            self._global_ids[tid] = new_session
+            print(f"[ReID] track {tid} registered as new session → {new_session}")
 
         # -- RoleEngine: classify all persons via point-based evidence ------
         engine = RoleEngine()
@@ -409,17 +502,24 @@ class LivePipeline:
                 customer_score=acc["customer_score"],
                 confirmed_role=acc["confirmed_role"],
                 cycle_count=acc["cycle_count"],
+                visited_tables=acc.get("visited_tables", ()),
+                visited_staff=acc.get("visited_staff", False),
             ))
 
         # Declare one ObservationFact per tracked person
         for obj in tracked_objects:
             tid = obj["track_id"]
             gid = self._global_ids.get(tid, f"local_{tid}")
+            
+            zone = obj.get("zone") or {}
+            zone_id = zone.get("zone_id", "unknown")
+
             engine.declare(ObservationFact(
                 track_id         = tid,
                 global_id        = gid,
                 action           = self._action_labels.get(tid, "unknown"),
                 zone_type        = obj.get("zone_type_normalized", "unknown"),
+                zone_id          = zone_id,
                 pose_frame_count = self._action_frame_counts.get(tid, 0),
                 appearance_count = 0,
                 previous_role    = self._person_roles.get(tid, "unknown"),
@@ -441,12 +541,26 @@ class LivePipeline:
                 f"cs={decision['customer_score']:.1f}"
             )
 
-            # Re-ID: register newly confirmed workers in gallery
-            if role == "worker" and tid not in self._global_ids:
+            # Re-ID Promotion: register newly confirmed workers in permanent gallery
+            gid = self._global_ids.get(tid)
+            if role == "worker" and gid and gid.startswith("session_"):
                 crop = crop_by_id.get(tid)
                 if crop is not None:
-                    global_id = self.reid_gallery.process(tid, crop)
-                    self._global_ids[tid] = global_id
+                    embedding = self.reid_gallery._extract(crop)
+                    new_worker_gid = self.reid_gallery._register(embedding)
+                    
+                    # Rename in our track mappings
+                    self._global_ids[tid] = new_worker_gid
+                    
+                    # Rename in the accumulators dict so RoleEngine continues next cycle
+                    if gid in self._role_accumulators:
+                        acc = self._role_accumulators.pop(gid)
+                        acc["global_id"] = new_worker_gid
+                        self._role_accumulators[new_worker_gid] = acc
+                        
+                    # Remove from session gallery
+                    self.session_gallery.remove(gid)
+                    print(f"[ReID] Promoted {gid} to permanent worker → {new_worker_gid}")
 
         # Persist accumulators for next cycle
         self._role_accumulators = engine.get_accumulators()

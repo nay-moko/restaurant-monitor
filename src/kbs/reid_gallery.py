@@ -14,6 +14,7 @@ Workflow
 
 from __future__ import annotations
 
+import time
 import uuid
 from pathlib import Path
 
@@ -131,3 +132,81 @@ class ReIDGallery:
             return
         self.index = faiss.read_index(str(p))
         self._ids  = np.load(str(p.with_suffix(".ids.npy")), allow_pickle=True).tolist()
+
+
+# ---------------------------------------------------------------------------
+# Session Gallery (Short-Term / Ephemeral)
+# ---------------------------------------------------------------------------
+
+class SessionGallery:
+    """
+    Short-term, in-memory gallery for tracking unknown persons/customers
+    during an active session. Purges old embeddings automatically to save memory.
+    Connects fragmented DeepSORT tracks when a camera glitches.
+    """
+    def __init__(self, threshold: float = 0.65, ttl_seconds: float = 1800):
+        self.threshold = threshold
+        self.ttl = ttl_seconds
+        
+        # global_id -> {"vector": np.ndarray, "last_seen": float}
+        self.embeddings: dict[str, dict] = {}
+        
+        self.index = faiss.IndexFlatIP(512)
+        self._ids: list[str] = []
+
+    def match(self, embedding: np.ndarray) -> str | None:
+        """Find the closest matching session ID if above threshold."""
+        if self.index.ntotal == 0:
+            return None
+            
+        similarities, indices = self.index.search(embedding, k=1)
+        sim = float(similarities[0][0])
+        idx = int(indices[0][0])
+        
+        if sim >= self.threshold:
+            return self._ids[idx]
+        return None
+
+    def register(self, embedding: np.ndarray) -> str:
+        """Add a new embedding and generate a new session ID."""
+        global_id = f"session_{uuid.uuid4().hex[:8]}"
+        self.update_seen(global_id, embedding)
+        return global_id
+
+    def update_seen(self, global_id: str, embedding: np.ndarray) -> None:
+        """Update the embedding vector and reset the TTL timer."""
+        self.embeddings[global_id] = {
+            "vector": embedding,
+            "last_seen": time.time()
+        }
+        self._rebuild_index()
+
+    def touch(self, global_id: str) -> None:
+        """Reset the TTL timer without changing the embedding."""
+        if global_id in self.embeddings:
+            self.embeddings[global_id]["last_seen"] = time.time()
+
+    def remove(self, global_id: str) -> None:
+        """Delete an embedding manually (used when promoted to worker)."""
+        if global_id in self.embeddings:
+            del self.embeddings[global_id]
+            self._rebuild_index()
+
+    def purge_old(self) -> None:
+        """Garbage collect embeddings older than TTL (30 mins)."""
+        now = time.time()
+        to_delete = [gid for gid, data in self.embeddings.items() if now - data["last_seen"] > self.ttl]
+        
+        if to_delete:
+            for gid in to_delete:
+                del self.embeddings[gid]
+            self._rebuild_index()
+            print(f"[SessionGallery] Purged {len(to_delete)} stale IDs: {to_delete}")
+
+    def _rebuild_index(self) -> None:
+        """Rebuild the Faiss index from the in-memory dictionary."""
+        self.index.reset()
+        self._ids = list(self.embeddings.keys())
+        if self._ids:
+            vectors = np.vstack([self.embeddings[gid]["vector"] for gid in self._ids])
+            self.index.add(vectors)

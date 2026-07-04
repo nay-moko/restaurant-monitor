@@ -51,6 +51,7 @@ class ObservationFact(Fact):
     global_id        = Field(str,    mandatory=True)
     action           = Field(str,    default="unknown")
     zone_type        = Field(str,    default="unknown")
+    zone_id          = Field(str,    default="unknown")
     pose_frame_count = Field(int,    default=0)
     appearance_count = Field(int,    default=0)
     previous_role    = Field(str,    default="unknown")
@@ -72,6 +73,8 @@ class ScoreAccumulator(Fact):
     customer_score = Field(float, default=0.0)
     confirmed_role = Field(str,   default="unknown")
     cycle_count    = Field(int,   default=0)
+    visited_tables = Field(tuple, default=())
+    visited_staff  = Field(bool,  default=False)
 
 
 class EvidenceApplied(Fact):
@@ -117,7 +120,7 @@ class RoleDecision(Fact):
 CONFIRM_THRESHOLD   = 15.0   # min score to confirm a role
 CONFIRM_MARGIN      = 8.0    # must lead the other score by this much
 REVERSAL_MARGIN     = 12.0   # contrary score must exceed by this to reverse
-DECAY_RATE          = 0.92   # multiply both scores each cycle (8% fade)
+DECAY_RATE          = 0.997  # 90-second half-life at 3fps
 
 # Evidence weights  (rule_tag → points)
 W_SIT_TABLE           = 6.0   # sitting + table  → very strong customer
@@ -133,6 +136,10 @@ W_REAPPEAR            = 2.5   # cross-camera reappearance > 2
 W_REAPPEAR_HIGH       = 3.0   # cross-camera reappearance > 4
 W_ENTRANCE_WALK       = 0.0   # entrance + walking → neutral (no points)
 W_STAND_WALK_ZONE     = 0.5   # standing in walk zone → very weak worker
+
+# Behavioral weights (macro-routing)
+W_MULTI_TABLE         = 2.0   # Applied per frame if len(visited_tables) >= 2
+W_STAFF_TO_TABLE      = 2.0   # Applied per frame if visited_staff=True AND currently at table
 
 
 # ── Engine ─────────────────────────────────────────────────────────────────
@@ -168,6 +175,8 @@ class RoleEngine(KnowledgeEngine):
             customer_score=0.0,
             confirmed_role=obs["previous_role"],
             cycle_count=0,
+            visited_tables=(),
+            visited_staff=False,
         ))
 
     # ── Decay: fade old evidence ───────────────────────────────────────
@@ -194,6 +203,29 @@ class RoleEngine(KnowledgeEngine):
     # ── Evidence Rules (salience=50) ───────────────────────────────────
     # Each rule: match observation + accumulator, guard against duplicate
     # firing with EvidenceApplied sentinel, then modify accumulator.
+
+    # --- BEHAVIORAL HISTORY UPDATES (salience=100) ---
+
+    @Rule(
+        ObservationFact(global_id=MATCH.gid, zone_type="table", zone_id=MATCH.zid),
+        TEST(lambda zid: zid != "unknown"),
+        AS.acc << ScoreAccumulator(global_id=MATCH.gid, visited_tables=MATCH.vt),
+        TEST(lambda zid, vt: zid not in vt),
+        salience=100,
+    )
+    def update_visited_tables(self, acc, gid, zid, vt):
+        """Record unique table visits to identify table-hopping."""
+        new_vt = tuple(list(vt) + [zid])
+        self.modify(acc, visited_tables=new_vt)
+
+    @Rule(
+        ObservationFact(global_id=MATCH.gid, zone_type="staff"),
+        AS.acc << ScoreAccumulator(global_id=MATCH.gid, visited_staff=False),
+        salience=100,
+    )
+    def update_visited_staff(self, acc, gid):
+        """Record that this person has entered a staff-only area."""
+        self.modify(acc, visited_staff=True)
 
     # --- CUSTOMER evidence ---
 
@@ -263,13 +295,14 @@ class RoleEngine(KnowledgeEngine):
         self.declare(EvidenceApplied(global_id=gid, rule_tag="staff_zone_long"))
 
     @Rule(
-        ObservationFact(global_id=MATCH.gid, action="serving"),
+        ObservationFact(global_id=MATCH.gid, action="serving", pose_frame_count=MATCH.pfc),
+        TEST(lambda pfc: pfc >= 4),
         AS.acc << ScoreAccumulator(global_id=MATCH.gid, worker_score=MATCH.ws),
         NOT(EvidenceApplied(global_id=MATCH.gid, rule_tag="serving")),
         salience=50,
     )
-    def ev_serving(self, acc, gid, ws):
-        """Serving action detected → moderate worker signal."""
+    def ev_serving(self, acc, gid, ws, pfc):
+        """Sustained serving action detected -> moderate worker signal. (Filters kids playing)"""
         self.modify(acc, worker_score=round(ws + W_SERVING, 3))
         self.declare(EvidenceApplied(global_id=gid, rule_tag="serving"))
 
@@ -324,6 +357,30 @@ class RoleEngine(KnowledgeEngine):
         """Sitting outside a table zone → mild worker signal (resting worker)."""
         self.modify(acc, worker_score=round(ws + W_SIT_NON_TABLE, 3))
         self.declare(EvidenceApplied(global_id=gid, rule_tag="sit_nontable"))
+
+    # --- MACRO-BEHAVIOR evidence ---
+
+    @Rule(
+        AS.acc << ScoreAccumulator(global_id=MATCH.gid, visited_tables=MATCH.vt, worker_score=MATCH.ws),
+        TEST(lambda vt: len(vt) >= 2),
+        NOT(EvidenceApplied(global_id=MATCH.gid, rule_tag="multi_table")),
+        salience=48,
+    )
+    def ev_multi_table(self, acc, gid, vt, ws):
+        """Visited multiple tables -> definitive worker routing behavior."""
+        self.modify(acc, worker_score=round(ws + W_MULTI_TABLE, 3))
+        self.declare(EvidenceApplied(global_id=gid, rule_tag="multi_table"))
+
+    @Rule(
+        ObservationFact(global_id=MATCH.gid, zone_type="table"),
+        AS.acc << ScoreAccumulator(global_id=MATCH.gid, visited_staff=True, worker_score=MATCH.ws),
+        NOT(EvidenceApplied(global_id=MATCH.gid, rule_tag="staff_to_table")),
+        salience=48,
+    )
+    def ev_staff_to_table(self, acc, gid, ws):
+        """Transit from staff zone to table -> definitive worker routing behavior."""
+        self.modify(acc, worker_score=round(ws + W_STAFF_TO_TABLE, 3))
+        self.declare(EvidenceApplied(global_id=gid, rule_tag="staff_to_table"))
 
     # --- Re-ID reappearance evidence ---
 
@@ -509,5 +566,7 @@ class RoleEngine(KnowledgeEngine):
                     "customer_score": fact["customer_score"],
                     "confirmed_role": fact["confirmed_role"],
                     "cycle_count":    fact["cycle_count"],
+                    "visited_tables": fact["visited_tables"],
+                    "visited_staff":  fact["visited_staff"],
                 }
         return results
