@@ -44,6 +44,7 @@ class ObservationFact(Fact):
     action           : str   – LSTM label: sitting|standing|walking|serving
     zone_type        : str   – normalized zone: table|walk|staff|unknown
     pose_frame_count : int   – consecutive pose-frames in current action+zone
+    previous_duration_frames : int – duration of the prior action+zone before reset
     appearance_count : int   – Re-ID cross-camera appearances
     previous_role    : str   – role from last cycle (unknown|customer|worker)
     """
@@ -53,6 +54,7 @@ class ObservationFact(Fact):
     zone_type        = Field(str,    default="unknown")
     zone_id          = Field(str,    default="unknown")
     pose_frame_count = Field(int,    default=0)
+    previous_duration_frames = Field(int, default=0)
     appearance_count = Field(int,    default=0)
     previous_role    = Field(str,    default="unknown")
 
@@ -67,6 +69,7 @@ class ScoreAccumulator(Fact):
     customer_score : float – accumulated customer evidence
     confirmed_role : str   – "unknown"|"customer"|"worker"
     cycle_count    : int   – how many cycles this accumulator has lived
+    zone_history   : tuple – last 5 (zone_type, action, duration_frames) states
     """
     global_id      = Field(str,   mandatory=True)
     worker_score   = Field(float, default=0.0)
@@ -75,12 +78,18 @@ class ScoreAccumulator(Fact):
     cycle_count    = Field(int,   default=0)
     visited_tables = Field(tuple, default=())
     visited_staff  = Field(bool,  default=False)
+    zone_history   = Field(tuple, default=())
 
 
 class EvidenceApplied(Fact):
     """Sentinel: evidence rule <rule_tag> already fired for <global_id>."""
     global_id = Field(str, mandatory=True)
     rule_tag  = Field(str, mandatory=True)
+
+
+class ZoneHistoryApplied(Fact):
+    """Sentinel: zone history already updated for <global_id> this cycle."""
+    global_id = Field(str, mandatory=True)
 
 
 class DecayApplied(Fact):
@@ -140,6 +149,12 @@ W_STAND_WALK_ZONE     = 0.5   # standing in walk zone → very weak worker
 # Behavioral weights (macro-routing)
 W_MULTI_TABLE         = 2.0   # Applied per frame if len(visited_tables) >= 2
 W_STAFF_TO_TABLE      = 2.0   # Applied per frame if visited_staff=True AND currently at table
+W_STAFF_WALK_TABLE_PATTERN = 5.0   # staff -> walk -> table transition pattern
+W_RECENT_SIT_CARRYOVER    = 2.5   # table sitting carryover into standing/walking
+W_TABLE_SIT_HISTORY_STRONG = 12.0  # strong customer evidence from recent table-sitting history
+
+ZONE_HISTORY_LIMIT = 5
+RECENT_SIT_CARRYOVER_FRAMES = 90  # 30s at the 3fps pose sampling rate
 
 
 # ── Engine ─────────────────────────────────────────────────────────────────
@@ -160,6 +175,10 @@ class RoleEngine(KnowledgeEngine):
         # Read RoleDecision facts from engine.facts
     """
 
+    @staticmethod
+    def _trim_zone_history(history: tuple) -> tuple:
+        return tuple(history[-ZONE_HISTORY_LIMIT:])
+
     # ── Bootstrap: ensure every observation has an accumulator ──────────
 
     @Rule(
@@ -177,6 +196,7 @@ class RoleEngine(KnowledgeEngine):
             cycle_count=0,
             visited_tables=(),
             visited_staff=False,
+            zone_history=(),
         ))
 
     # ── Decay: fade old evidence ───────────────────────────────────────
@@ -226,6 +246,37 @@ class RoleEngine(KnowledgeEngine):
     def update_visited_staff(self, acc, gid):
         """Record that this person has entered a staff-only area."""
         self.modify(acc, visited_staff=True)
+
+    @Rule(
+        AS.obs << ObservationFact(
+            global_id=MATCH.gid,
+            action=MATCH.action,
+            zone_type=MATCH.zone_type,
+            pose_frame_count=MATCH.pfc,
+            previous_duration_frames=MATCH.prev_pfc,
+        ),
+        AS.acc << ScoreAccumulator(global_id=MATCH.gid, zone_history=MATCH.history),
+        NOT(ZoneHistoryApplied(global_id=MATCH.gid)),
+        salience=99,
+    )
+    def update_zone_history(self, acc, gid, action, zone_type, pfc, prev_pfc, history):
+        """Track the latest contiguous zone/action segment in a bounded history."""
+        current_entry = (zone_type, action, pfc)
+        current_key = current_entry[:2]
+
+        new_history = list(history)
+
+        if new_history and new_history[-1][:2] == current_key:
+            last_zone, last_action, last_duration = new_history[-1]
+            new_history[-1] = (last_zone, last_action, max(last_duration, pfc))
+        else:
+            if new_history and prev_pfc > 0:
+                last_zone, last_action, last_duration = new_history[-1]
+                new_history[-1] = (last_zone, last_action, max(last_duration, prev_pfc))
+            new_history.append(current_entry)
+
+        self.modify(acc, zone_history=self._trim_zone_history(tuple(new_history)))
+        self.declare(ZoneHistoryApplied(global_id=gid))
 
     # --- CUSTOMER evidence ---
 
@@ -381,6 +432,7 @@ class RoleEngine(KnowledgeEngine):
     # --- MACRO-BEHAVIOR evidence ---
 
     @Rule(
+        ObservationFact(global_id=MATCH.gid),
         AS.acc << ScoreAccumulator(global_id=MATCH.gid, visited_tables=MATCH.vt, worker_score=MATCH.ws),
         TEST(lambda vt: len(vt) >= 2),
         NOT(EvidenceApplied(global_id=MATCH.gid, rule_tag="multi_table")),
@@ -403,6 +455,64 @@ class RoleEngine(KnowledgeEngine):
         self.modify(acc, worker_score=round(ws + W_STAFF_TO_TABLE, 3))
         print(f"[RoleEngine] EVIDENCE fired: gid={gid} rule_tag=staff_to_table (will not re-fire until reset/decay episode)")
         self.declare(EvidenceApplied(global_id=gid, rule_tag="staff_to_table"))
+
+    @staticmethod
+    def _has_staff_walk_table_pattern(history: tuple) -> bool:
+        filtered = [h[0] for h in history if h[0] != "unknown"]
+        return len(filtered) >= 3 and filtered[-3:] == ["staff", "walk", "table"]
+
+    @Rule(
+        ObservationFact(global_id=MATCH.gid, zone_type="table"),
+        AS.acc << ScoreAccumulator(
+            global_id=MATCH.gid,
+            zone_history=MATCH.history,
+            worker_score=MATCH.ws,
+        ),
+        TEST(lambda history: RoleEngine._has_staff_walk_table_pattern(history)),
+        NOT(EvidenceApplied(global_id=MATCH.gid, rule_tag="staff_walk_table_pattern")),
+        salience=47,
+    )
+    def ev_staff_walk_table_pattern(self, acc, gid, ws, history):
+        """staff -> walk -> table route strongly suggests a worker."""
+        self.modify(acc, worker_score=round(ws + W_STAFF_WALK_TABLE_PATTERN, 3))
+        print(f"[RoleEngine] EVIDENCE fired: gid={gid} rule_tag=staff_walk_table_pattern (will not re-fire until reset/decay episode)")
+        self.declare(EvidenceApplied(global_id=gid, rule_tag="staff_walk_table_pattern"))
+
+    @Rule(
+        ObservationFact(global_id=MATCH.gid, action=MATCH.action, zone_type=MATCH.zt),
+        TEST(lambda action, zt: action in ("standing", "walking") and zt != "table"),
+        AS.acc << ScoreAccumulator(
+            global_id=MATCH.gid,
+            zone_history=MATCH.history,
+            customer_score=MATCH.cs,
+        ),
+        TEST(lambda history: any(h[0] == "table" and h[1] == "sitting" and h[2] >= RECENT_SIT_CARRYOVER_FRAMES for h in history[:-1])),
+        NOT(EvidenceApplied(global_id=MATCH.gid, rule_tag="recent_sit_carryover")),
+        salience=47,
+    )
+    def ev_recent_sit_carryover(self, acc, gid, cs, action, zt, history):
+        """A recent long sit at table should carry some customer evidence forward."""
+        self.modify(acc, customer_score=round(cs + W_RECENT_SIT_CARRYOVER, 3))
+        print(f"[RoleEngine] EVIDENCE fired: gid={gid} rule_tag=recent_sit_carryover (will not re-fire until reset/decay episode)")
+        self.declare(EvidenceApplied(global_id=gid, rule_tag="recent_sit_carryover"))
+
+    @Rule(
+        ObservationFact(global_id=MATCH.gid, zone_type="table", action=MATCH.action),
+        TEST(lambda action: action != "sitting"),
+        AS.acc << ScoreAccumulator(
+            global_id=MATCH.gid,
+            zone_history=MATCH.history,
+            customer_score=MATCH.cs,
+        ),
+        TEST(lambda history: any(h[0] == "table" and h[1] == "sitting" and h[2] >= RECENT_SIT_CARRYOVER_FRAMES for h in history[:-1])),
+        NOT(EvidenceApplied(global_id=MATCH.gid, rule_tag="table_sit_history_strong")),
+        salience=46,
+    )
+    def ev_table_sit_history_strong(self, acc, gid, cs, action, history):
+        """Recent long table sitting in history is a very strong customer signal."""
+        self.modify(acc, customer_score=round(cs + W_TABLE_SIT_HISTORY_STRONG, 3))
+        print(f"[RoleEngine] EVIDENCE fired: gid={gid} rule_tag=table_sit_history_strong (will not re-fire until reset/decay episode)")
+        self.declare(EvidenceApplied(global_id=gid, rule_tag="table_sit_history_strong"))
 
     # --- Re-ID reappearance evidence ---
 
@@ -525,9 +635,12 @@ class RoleEngine(KnowledgeEngine):
                            old_gid, new_gid,
                            old_ws, old_cs, new_ws, new_cs):
         """Merge old accumulator into the new one and remove old."""
+        old_history = old_acc["zone_history"]
+        new_history = new_acc["zone_history"]
         self.modify(new_acc,
             worker_score=round(new_ws + old_ws, 3),
             customer_score=round(new_cs + old_cs, 3),
+            zone_history=self._trim_zone_history(old_history + new_history),
         )
         self.retract(old_acc)
         self.retract(merge)
@@ -596,5 +709,6 @@ class RoleEngine(KnowledgeEngine):
                     "cycle_count":    fact["cycle_count"],
                     "visited_tables": fact["visited_tables"],
                     "visited_staff":  fact["visited_staff"],
+                    "zone_history":   fact["zone_history"],
                 }
         return results
