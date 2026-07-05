@@ -43,10 +43,22 @@ class ReIDGallery:
 
     EMBEDDING_DIM = 512
 
+    # Crops smaller than this are too low-res/blurry for a trustworthy
+    # embedding — accepting them into the gallery is exactly what causes
+    # worker X's identity to get handed to unknown person Y.
+    MIN_CROP_WIDTH = 40
+    MIN_CROP_HEIGHT = 80
+
+    # A match must not just clear `threshold` — it must beat the runner-up
+    # by at least this much. A "confidently wrong" match (0.66 vs 0.65) is
+    # far more dangerous than an honest "no match" (which just registers a
+    # new id). This margin check is what actually catches those.
+    MIN_MATCH_MARGIN = 0.05
+
     def __init__(
         self,
         model_name : str   = "osnet_x0_25",
-        threshold  : float = 0.65,
+        threshold  : float = 0.72,
         device     : str   = "cpu",
         weights_dir: str   = "models/reid",
     ):
@@ -75,6 +87,15 @@ class ReIDGallery:
         Main entry point called by live_pipeline for every worker crop.
         Returns the global_id (existing match or newly registered).
         """
+        h, w = crop.shape[:2]
+        if w < self.MIN_CROP_WIDTH or h < self.MIN_CROP_HEIGHT:
+            # Crop too small/low-res to trust — do NOT attempt a match against
+            # the gallery (this is exactly the scenario that hands worker X's
+            # identity to a blurry unrelated person Y). Caller should treat
+            # a None return as "skip ReID this frame, keep previous id".
+            print(f"[ReIDGallery] track {track_id}: crop too small ({w}x{h}, min {self.MIN_CROP_WIDTH}x{self.MIN_CROP_HEIGHT}) — skipping match, not registering")
+            return None
+
         embedding = self._extract(crop)
         global_id = self._match(embedding)
 
@@ -97,17 +118,28 @@ class ReIDGallery:
         return vec                                      # shape (1, 512)
 
     def _match(self, embedding: np.ndarray) -> str | None:
-        """Return global_id of closest gallery entry if above threshold, else None."""
+        """Return global_id of closest gallery entry if above threshold AND
+        clearly ahead of the runner-up, else None.
+        """
         if self.index.ntotal == 0:
             return None
 
-        similarities, indices = self.index.search(embedding, k=1)
+        k = min(2, self.index.ntotal)
+        similarities, indices = self.index.search(embedding, k=k)
         sim   = float(similarities[0][0])
         idx   = int(indices[0][0])
 
-        if sim >= self.threshold:
-            return self._ids[idx]
-        return None
+        if sim < self.threshold:
+            return None
+
+        if k > 1:
+            runner_up_sim = float(similarities[0][1])
+            margin = sim - runner_up_sim
+            if margin < self.MIN_MATCH_MARGIN:
+                print(f"[ReIDGallery] ambiguous match rejected: top={sim:.3f} runner_up={runner_up_sim:.3f} margin={margin:.3f} < {self.MIN_MATCH_MARGIN} — registering as new identity instead")
+                return None
+
+        return self._ids[idx]
 
     def _register(self, embedding: np.ndarray) -> str:
         """Add new embedding to gallery, return assigned global_id."""
@@ -155,17 +187,24 @@ class SessionGallery:
         self._ids: list[str] = []
 
     def match(self, embedding: np.ndarray) -> str | None:
-        """Find the closest matching session ID if above threshold."""
+        """Find the closest matching session ID if above threshold AND clearly ahead of runner-up."""
         if self.index.ntotal == 0:
             return None
-            
-        similarities, indices = self.index.search(embedding, k=1)
+
+        k = min(2, self.index.ntotal)
+        similarities, indices = self.index.search(embedding, k=k)
         sim = float(similarities[0][0])
         idx = int(indices[0][0])
-        
-        if sim >= self.threshold:
-            return self._ids[idx]
-        return None
+
+        if sim < self.threshold:
+            return None
+
+        if k > 1:
+            runner_up_sim = float(similarities[0][1])
+            if (sim - runner_up_sim) < ReIDGallery.MIN_MATCH_MARGIN:
+                return None
+
+        return self._ids[idx]
 
     def register(self, embedding: np.ndarray) -> str:
         """Add a new embedding and generate a new session ID."""
@@ -209,4 +248,4 @@ class SessionGallery:
         self._ids = list(self.embeddings.keys())
         if self._ids:
             vectors = np.vstack([self.embeddings[gid]["vector"] for gid in self._ids])
-            self.index.add(vectors)
+            self.index.add(vectors)

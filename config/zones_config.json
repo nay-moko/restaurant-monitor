@@ -129,64 +129,52 @@
     },
     "zones": [
       {
-        "zone_id": "cam02_table_1",
+        "zone_id": "cam02_table_area_1",
         "zone_type": "table_area",
-        "zone_name": "طاولة 1",
+        "zone_name": "منطقة طاولات 1",
         "points": [
           [
-            427,
-            216
+            129,
+            244
           ],
           [
-            1919,
+            373,
+            185
+          ],
+          [
+            1834,
             1076
           ],
           [
-            246,
+            224,
             1074
-          ],
-          [
-            144,
-            442
-          ],
-          [
-            157,
-            233
-          ],
-          [
-            401,
-            190
           ]
         ]
       },
       {
-        "zone_id": "cam02_table_2",
+        "zone_id": "cam02_table_area_2",
         "zone_type": "table_area",
-        "zone_name": "طاولة 2",
+        "zone_name": "منطقة طاولات 2",
         "points": [
           [
-            664,
-            269
+            617,
+            246
           ],
           [
-            1485,
-            640
+            1414,
+            668
           ],
           [
-            1891,
-            448
+            1867,
+            474
           ],
           [
-            1873,
-            366
+            1871,
+            362
           ],
           [
-            992,
-            140
-          ],
-          [
-            625,
-            235
+            989,
+            134
           ]
         ]
       },
@@ -196,24 +184,300 @@
         "zone_name": "ممر خدمة 1",
         "points": [
           [
-            1910,
-            438
+            461,
+            237
           ],
           [
-            1490,
-            638
+            576,
+            213
           ],
           [
-            524,
-            185
+            1414,
+            670
           ],
           [
-            418,
-            203
+            1867,
+            474
+          ],
+          [
+            1875,
+            369
+          ],
+          [
+            1912,
+            386
           ],
           [
             1919,
             1071
+          ],
+          [
+            1843,
+            1074
+          ]
+        ]
+      },
+      {
+        "zone_id": "cam02_table_area_1_table_1",
+        "zone_type": "table",
+        "zone_name": "طاولة 1",
+        "parent_zone_id": "cam02_table_area_1",
+        "points": [
+          [
+            343,
+            1076
+          ],
+          [
+            1227,
+            707
+          ],
+          [
+            1839,
+            1074
+          ]
+        ]
+      },
+      {
+        "zone_id": "cam02_table_area_1_table_2",
+        "zone_type": "table",
+        "zone_name": "طاولة 2",
+        "parent_zone_id": "cam02_table_area_1",
+        "points": [
+          [
+            817,
+            453
+          ],
+          [
+            155,
+            539
+          ],
+          [
+            209,
+            970
+          ],
+          [
+            1145,
+            655
+          ]
+        ]
+      },
+      {
+        "zone_id": "cam02_table_area_1_table_3",
+        "zone_type": "table",
+        "zone_name": "طاولة 3",
+        "parent_zone_id": "cam02_table_area_1",
+        "points": [
+          [
+            140,
+            407
+          ],
+          [
+            571,
+            306
+          ],
+          [
+            759,
+            418
+          ],
+          [
+            153,
+            539
+          ]
+        ]
+      },
+      {
+        "zone_id": "cam02_table_area_1_table_4",
+        "zone_type": "table",
+        "zone_name": "طاولة 4",
+        "parent_zone_id": "cam02_table_area_1",
+        "points": [
+          [
+            448,
+            241
+          ],
+          [
+            573,
+            302
+          ],
+          [
+            142,
+            405
+          ],
+          [
+            140,
+            315
+          ]
+        ]
+      },
+      {
+        "zone_id": "cam02_table_area_2_table_1",
+        "zone_type": "table",
+        "zone_name": "طاولة 1",
+        "parent_zone_id": "cam02_table_area_2",
+        "points": [
+          [
+            1078,
+            481
+          ],
+          [
+            1509,
+            345
+          ],
+          [
+            1802,
+            504
+          ],
+          [
+            1412,
+            668
+          ]
+        ]
+      },
+      {
+        "zone_id": "cam02_table_area_2_table_2",
+        "zone_type": "table",
+        "zone_name": "طاولة 2",
+        "parent_zone_id": "cam02_table_area_2",
+        "points": [
+          [
+            1518,
+            347
+          ],
+          [
+            1638,
+            304
+          ],
+          [
+            1873,
+            364
+          ],
+          [
+            1869,
+            470
+          ],
+          [
+            1802,
+            498
+          ]
+        ]
+      },
+      {
+        "zone_id": "cam02_table_area_2_table_3",
+        "zone_type": "table",
+        "zone_name": "طاولة 3",
+        "parent_zone_id": "cam02_table_area_2",
+        "points": [
+          [
+            1451,
+            362
+          ],
+          [
+            1240,
+            274
+          ],
+          [
+            1395,
+            239
+          ],
+          [
+            1630,
+            300
+          ]
+        ]
+      },
+      {
+        "zone_id": "cam02_table_area_2_table_4",
+        "zone_type": "table",
+        "zone_name": "طاولة 4",
+        "parent_zone_id": "cam02_table_area_2",
+        "points": [
+          [
+            1235,
+            274
+          ],
+          [
+            836,
+            356
+          ],
+          [
+            1078,
+            479
+          ],
+          [
+            1453,
+            362
+          ]
+        ]
+      },
+      {
+        "zone_id": "cam02_table_area_2_table_5",
+        "zone_type": "table",
+        "zone_name": "طاولة 5",
+        "parent_zone_id": "cam02_table_area_2",
+        "points": [
+          [
+            729,
+            291
+          ],
+          [
+            1046,
+            216
+          ],
+          [
+            1166,
+            285
+          ],
+          [
+            836,
+            358
+          ]
+        ]
+      },
+      {
+        "zone_id": "cam02_table_area_2_table_6",
+        "zone_type": "table",
+        "zone_name": "طاولة 6",
+        "parent_zone_id": "cam02_table_area_2",
+        "points": [
+          [
+            1063,
+            220
+          ],
+          [
+            1211,
+            192
+          ],
+          [
+            1386,
+            237
+          ],
+          [
+            1173,
+            287
+          ]
+        ]
+      },
+      {
+        "zone_id": "cam02_table_area_2_table_7",
+        "zone_type": "table",
+        "zone_name": "طاولة 7",
+        "parent_zone_id": "cam02_table_area_2",
+        "points": [
+          [
+            638,
+            244
+          ],
+          [
+            729,
+            291
+          ],
+          [
+            1173,
+            183
+          ],
+          [
+            1000,
+            134
           ]
         ]
       }

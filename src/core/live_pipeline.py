@@ -24,7 +24,8 @@ from src.core.classifiers import PoseLSTM
 
 class LivePipeline:
     ZONE_TYPE_MAP: dict[str, str] = {
-        "table_area"           : "table",
+        "table_area"           : "table",   # broad container zone
+        "table"                : "table",   # single table zone (nested inside table_area) — was missing, caused zone_type_normalized="unknown"
         "service_path"         : "walk",
         "hallway"              : "walk",
         "corridor"             : "walk",
@@ -171,6 +172,7 @@ class LivePipeline:
         enriched_tracks: list[dict[str, Any]] = []
 
         pose_points_by_track_id: dict[int, list[int]] = {}
+        kpts_by_track_id: dict[int, np.ndarray] = {}
         if detections and keypoints_list:
             for det, kpts in zip(detections, keypoints_list):
                 if kpts is None:
@@ -181,18 +183,21 @@ class LivePipeline:
                     continue
 
                 pose_points_by_track_id[track_id] = self._estimate_zone_point(det.get("box", [0, 0, 0, 0]), kpts)
+                kpts_by_track_id[track_id] = kpts
 
         for obj in tracked_objects:
             track_id = obj.get("track_id")
             box = obj.get("box", [0, 0, 0, 0])
             zone_point = pose_points_by_track_id.get(track_id)
+            kpts = kpts_by_track_id.get(track_id)
 
             if zone_point is None:
                 zone_point = self._estimate_zone_point(box, None)
 
-            zone = self.zone_manager.get_point_zone(
+            zone = self.zone_manager.get_bbox_zone(
                 camera_id=camera_id,
-                point=zone_point,
+                box=box,
+                keypoints=kpts,
             )
             enriched_obj = dict(obj)
             enriched_obj["zone"] = zone
@@ -506,7 +511,16 @@ class LivePipeline:
             crop = crop_by_id.get(tid)
             if crop is None:
                 continue
-                
+
+            # Crop too small/low-res → embedding is unreliable and is exactly
+            # what causes worker X's identity to get handed to a blurry,
+            # unrelated person Y. Skip ReID this frame; track stays without
+            # a global_id and will be retried once a better crop comes in.
+            crop_h, crop_w = crop.shape[:2]
+            if crop_w < self.reid_gallery.MIN_CROP_WIDTH or crop_h < self.reid_gallery.MIN_CROP_HEIGHT:
+                print(f"[ReID] track {tid}: crop too small ({crop_w}x{crop_h}) — skipping ReID this frame")
+                continue
+
             embedding = self.reid_gallery._extract(crop)
 
             # 1. Check permanent Worker Gallery

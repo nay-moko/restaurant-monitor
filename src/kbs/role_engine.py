@@ -238,6 +238,7 @@ class RoleEngine(KnowledgeEngine):
     def ev_sit_table(self, acc, gid, cs):
         """Sitting at a table → strong customer signal."""
         self.modify(acc, customer_score=round(cs + W_SIT_TABLE, 3))
+        print(f"[RoleEngine] EVIDENCE fired: gid={gid} rule_tag=sit_table (will not re-fire until reset/decay episode)")
         self.declare(EvidenceApplied(global_id=gid, rule_tag="sit_table"))
 
     @Rule(
@@ -253,6 +254,7 @@ class RoleEngine(KnowledgeEngine):
     def ev_sit_table_long(self, acc, gid, cs, pfc):
         """Sitting at table for extended time → bonus customer evidence."""
         self.modify(acc, customer_score=round(cs + W_SIT_TABLE_LONG, 3))
+        print(f"[RoleEngine] EVIDENCE fired: gid={gid} rule_tag=sit_table_long (will not re-fire until reset/decay episode)")
         self.declare(EvidenceApplied(global_id=gid, rule_tag="sit_table_long"))
 
     @Rule(
@@ -264,6 +266,7 @@ class RoleEngine(KnowledgeEngine):
     def ev_stand_table(self, acc, gid, cs):
         """Standing near table → mild customer signal."""
         self.modify(acc, customer_score=round(cs + W_STAND_TABLE, 3))
+        print(f"[RoleEngine] EVIDENCE fired: gid={gid} rule_tag=stand_table (will not re-fire until reset/decay episode)")
         self.declare(EvidenceApplied(global_id=gid, rule_tag="stand_table"))
 
     # --- WORKER evidence ---
@@ -277,6 +280,7 @@ class RoleEngine(KnowledgeEngine):
     def ev_staff_zone(self, acc, gid, ws):
         """Present in staff-only zone → strong worker signal."""
         self.modify(acc, worker_score=round(ws + W_STAFF_ZONE, 3))
+        print(f"[RoleEngine] EVIDENCE fired: gid={gid} rule_tag=staff_zone (will not re-fire until reset/decay episode)")
         self.declare(EvidenceApplied(global_id=gid, rule_tag="staff_zone"))
 
     @Rule(
@@ -292,6 +296,7 @@ class RoleEngine(KnowledgeEngine):
     def ev_staff_zone_long(self, acc, gid, ws, pfc):
         """Lingering in staff zone → bonus worker evidence."""
         self.modify(acc, worker_score=round(ws + W_STAFF_ZONE_LONG, 3))
+        print(f"[RoleEngine] EVIDENCE fired: gid={gid} rule_tag=staff_zone_long (will not re-fire until reset/decay episode)")
         self.declare(EvidenceApplied(global_id=gid, rule_tag="staff_zone_long"))
 
     @Rule(
@@ -304,6 +309,7 @@ class RoleEngine(KnowledgeEngine):
     def ev_serving(self, acc, gid, ws, pfc):
         """Sustained serving action detected -> moderate worker signal. (Filters kids playing)"""
         self.modify(acc, worker_score=round(ws + W_SERVING, 3))
+        print(f"[RoleEngine] EVIDENCE fired: gid={gid} rule_tag=serving (will not re-fire until reset/decay episode)")
         self.declare(EvidenceApplied(global_id=gid, rule_tag="serving"))
 
     @Rule(
@@ -319,28 +325,41 @@ class RoleEngine(KnowledgeEngine):
     def ev_serving_sustained(self, acc, gid, ws, pfc):
         """Sustained serving action → strong worker evidence."""
         self.modify(acc, worker_score=round(ws + W_SERVING_SUSTAINED, 3))
+        print(f"[RoleEngine] EVIDENCE fired: gid={gid} rule_tag=serving_sustained (will not re-fire until reset/decay episode)")
         self.declare(EvidenceApplied(global_id=gid, rule_tag="serving_sustained"))
+
+    # NOTE: walking/standing in a walk zone is NOT a standalone worker signal —
+    # customers walk through walk zones too. These rules now only REINFORCE
+    # an identity that RoleEngine has already confirmed as "worker" (via
+    # staff_zone/serving/reappear evidence). They cannot help an "unknown"
+    # or "customer" person become a worker on their own.
 
     @Rule(
         ObservationFact(global_id=MATCH.gid, action="walking", zone_type="walk"),
-        AS.acc << ScoreAccumulator(global_id=MATCH.gid, worker_score=MATCH.ws),
+        AS.acc << ScoreAccumulator(
+            global_id=MATCH.gid, worker_score=MATCH.ws, confirmed_role="worker",
+        ),
         NOT(EvidenceApplied(global_id=MATCH.gid, rule_tag="walk_service")),
         salience=50,
     )
     def ev_walk_service(self, acc, gid, ws):
-        """Walking in service/walk zone → weak worker signal."""
+        """Walking in service/walk zone → weak reinforcement, workers only."""
         self.modify(acc, worker_score=round(ws + W_WALK_SERVICE, 3))
+        print(f"[RoleEngine] EVIDENCE fired: gid={gid} rule_tag=walk_service (will not re-fire until reset/decay episode)")
         self.declare(EvidenceApplied(global_id=gid, rule_tag="walk_service"))
 
     @Rule(
         ObservationFact(global_id=MATCH.gid, action="standing", zone_type="walk"),
-        AS.acc << ScoreAccumulator(global_id=MATCH.gid, worker_score=MATCH.ws),
+        AS.acc << ScoreAccumulator(
+            global_id=MATCH.gid, worker_score=MATCH.ws, confirmed_role="worker",
+        ),
         NOT(EvidenceApplied(global_id=MATCH.gid, rule_tag="stand_walk")),
         salience=50,
     )
     def ev_stand_walk_zone(self, acc, gid, ws):
-        """Standing in walk zone → very weak worker signal."""
+        """Standing in walk zone → very weak reinforcement, workers only."""
         self.modify(acc, worker_score=round(ws + W_STAND_WALK_ZONE, 3))
+        print(f"[RoleEngine] EVIDENCE fired: gid={gid} rule_tag=stand_walk (will not re-fire until reset/decay episode)")
         self.declare(EvidenceApplied(global_id=gid, rule_tag="stand_walk"))
 
     @Rule(
@@ -356,6 +375,7 @@ class RoleEngine(KnowledgeEngine):
     def ev_sit_non_table(self, acc, gid, ws, zt):
         """Sitting outside a table zone → mild worker signal (resting worker)."""
         self.modify(acc, worker_score=round(ws + W_SIT_NON_TABLE, 3))
+        print(f"[RoleEngine] EVIDENCE fired: gid={gid} rule_tag=sit_nontable (will not re-fire until reset/decay episode)")
         self.declare(EvidenceApplied(global_id=gid, rule_tag="sit_nontable"))
 
     # --- MACRO-BEHAVIOR evidence ---
@@ -369,6 +389,7 @@ class RoleEngine(KnowledgeEngine):
     def ev_multi_table(self, acc, gid, vt, ws):
         """Visited multiple tables -> definitive worker routing behavior."""
         self.modify(acc, worker_score=round(ws + W_MULTI_TABLE, 3))
+        print(f"[RoleEngine] EVIDENCE fired: gid={gid} rule_tag=multi_table (will not re-fire until reset/decay episode)")
         self.declare(EvidenceApplied(global_id=gid, rule_tag="multi_table"))
 
     @Rule(
@@ -380,6 +401,7 @@ class RoleEngine(KnowledgeEngine):
     def ev_staff_to_table(self, acc, gid, ws):
         """Transit from staff zone to table -> definitive worker routing behavior."""
         self.modify(acc, worker_score=round(ws + W_STAFF_TO_TABLE, 3))
+        print(f"[RoleEngine] EVIDENCE fired: gid={gid} rule_tag=staff_to_table (will not re-fire until reset/decay episode)")
         self.declare(EvidenceApplied(global_id=gid, rule_tag="staff_to_table"))
 
     # --- Re-ID reappearance evidence ---
@@ -397,6 +419,7 @@ class RoleEngine(KnowledgeEngine):
     def ev_reappear(self, acc, gid, ws, ac):
         """Appeared across cameras > 2 times → worker signal."""
         self.modify(acc, worker_score=round(ws + W_REAPPEAR, 3))
+        print(f"[RoleEngine] EVIDENCE fired: gid={gid} rule_tag=reappear (will not re-fire until reset/decay episode)")
         self.declare(EvidenceApplied(global_id=gid, rule_tag="reappear"))
 
     @Rule(
@@ -412,6 +435,7 @@ class RoleEngine(KnowledgeEngine):
     def ev_reappear_high(self, acc, gid, ws, ac):
         """Appeared across cameras > 4 times → stronger worker signal."""
         self.modify(acc, worker_score=round(ws + W_REAPPEAR_HIGH, 3))
+        print(f"[RoleEngine] EVIDENCE fired: gid={gid} rule_tag=reappear_high (will not re-fire until reset/decay episode)")
         self.declare(EvidenceApplied(global_id=gid, rule_tag="reappear_high"))
 
     # ── Confirmation: first-time role lock ─────────────────────────────
@@ -428,6 +452,7 @@ class RoleEngine(KnowledgeEngine):
     )
     def confirm_customer(self, acc, gid, cs, ws):
         """Customer score crossed threshold with sufficient margin."""
+        print(f"[RoleEngine] CONFIRM gid={gid} → customer (cs={cs}, ws={ws})")
         self.modify(acc, confirmed_role="customer")
 
     @Rule(
@@ -442,6 +467,7 @@ class RoleEngine(KnowledgeEngine):
     )
     def confirm_worker(self, acc, gid, ws, cs):
         """Worker score crossed threshold with sufficient margin."""
+        print(f"[RoleEngine] CONFIRM gid={gid} → worker (ws={ws}, cs={cs})")
         self.modify(acc, confirmed_role="worker")
 
     # ── Reversal: override a sticky confirmation ───────────────────────
@@ -458,6 +484,7 @@ class RoleEngine(KnowledgeEngine):
     )
     def reverse_to_worker(self, acc, gid, ws, cs):
         """Strong worker evidence overturns a customer confirmation."""
+        print(f"[RoleEngine] REVERSAL gid={gid} customer → worker (ws={ws}, cs={cs})")
         self.modify(acc, confirmed_role="worker")
 
     @Rule(
@@ -472,6 +499,7 @@ class RoleEngine(KnowledgeEngine):
     )
     def reverse_to_customer(self, acc, gid, cs, ws):
         """Strong customer evidence overturns a worker confirmation."""
+        print(f"[RoleEngine] REVERSAL gid={gid} worker → customer (cs={cs}, ws={ws})")
         self.modify(acc, confirmed_role="customer")
 
     # ── Re-ID Merge: combine accumulators when track changes ───────────
