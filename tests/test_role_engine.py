@@ -32,6 +32,7 @@ def run_single_cycle(observations, prior_accumulators=None, merges=None):
                 customer_score=acc["customer_score"],
                 confirmed_role=acc["confirmed_role"],
                 cycle_count=acc["cycle_count"],
+                zone_history=acc.get("zone_history", ()),
             ))
 
     # Declare merge requests
@@ -269,6 +270,142 @@ def test_merge():
     print("  ✅ PASSED")
 
 
+# ── Test 8: Zone history and carryover evidence ─────────────────────────
+
+def test_zone_history_tracks_transitions_and_patterns():
+    """Zone history should preserve transitions and drive the new evidence rules."""
+    print("\n[Test 8] Zone history tracks transitions and patterns")
+
+    accumulators = None
+    obs_cycles = [
+        [{
+            "track_id": 8,
+            "global_id": "person_hist",
+            "action": "standing",
+            "zone_type": "staff",
+            "pose_frame_count": 2,
+            "appearance_count": 0,
+            "previous_role": "unknown",
+            "previous_duration_frames": 0,
+        }],
+        [{
+            "track_id": 8,
+            "global_id": "person_hist",
+            "action": "walking",
+            "zone_type": "walk",
+            "pose_frame_count": 1,
+            "appearance_count": 0,
+            "previous_role": "unknown",
+            "previous_duration_frames": 2,
+        }],
+        [{
+            "track_id": 8,
+            "global_id": "person_hist",
+            "action": "standing",
+            "zone_type": "table",
+            "pose_frame_count": 1,
+            "appearance_count": 0,
+            "previous_role": "unknown",
+            "previous_duration_frames": 1,
+        }],
+    ]
+
+    for obs in obs_cycles:
+        decisions, accumulators = run_single_cycle(obs, prior_accumulators=accumulators)
+
+    acc = accumulators["person_hist"]
+    print(f"  zone_history = {acc['zone_history']}")
+    assert len(acc["zone_history"]) >= 3, "History should capture the recent transitions"
+    assert acc["zone_history"][-3][0] == "staff"
+    assert acc["zone_history"][-2][0] == "walk"
+    assert acc["zone_history"][-1][0] == "table"
+    assert acc["worker_score"] > 5.0, "Pattern evidence should add worker score"
+    print("  ✅ PASSED")
+
+
+def test_recent_sit_carryover_evidence():
+    """A long table sit should carry customer evidence into a standing transition."""
+    print("\n[Test 9] Recent sit carryover adds customer evidence")
+
+    accumulators = None
+    obs_cycles = [
+        [{
+            "track_id": 9,
+            "global_id": "person_sit",
+            "action": "sitting",
+            "zone_type": "table",
+            "pose_frame_count": 95,
+            "appearance_count": 0,
+            "previous_role": "unknown",
+            "previous_duration_frames": 0,
+        }],
+        [{
+            "track_id": 9,
+            "global_id": "person_sit",
+            "action": "standing",
+            "zone_type": "table",
+            "pose_frame_count": 1,
+            "appearance_count": 0,
+            "previous_role": "unknown",
+            "previous_duration_frames": 95,
+        }],
+    ]
+
+    _, accumulators = run_single_cycle(obs_cycles[0], prior_accumulators=accumulators)
+    first_customer_score = accumulators["person_sit"]["customer_score"]
+
+    _, accumulators = run_single_cycle(obs_cycles[1], prior_accumulators=accumulators)
+    acc = accumulators["person_sit"]
+
+    print(f"  zone_history = {acc['zone_history']}")
+    print(f"  customer_score before/after = {first_customer_score:.1f} -> {acc['customer_score']:.1f}")
+    assert len(acc["zone_history"]) >= 2, "History should keep the recent table sit and standing transition"
+    assert acc["zone_history"][-2][0] == "table"
+    assert acc["zone_history"][-2][1] == "sitting"
+    assert acc["zone_history"][-2][2] >= 90
+    assert acc["customer_score"] > first_customer_score, "Carryover evidence should increase customer score"
+    print("  ✅ PASSED")
+
+
+def test_table_sit_history_is_very_strong_customer_evidence():
+    """Recent long table sitting in history should heavily boost customer evidence."""
+    print("\n[Test 10] Table-sit history is very strong customer evidence")
+
+    accumulators = None
+    obs_cycles = [
+        [{
+            "track_id": 10,
+            "global_id": "person_table_hist",
+            "action": "sitting",
+            "zone_type": "table",
+            "pose_frame_count": 95,
+            "appearance_count": 0,
+            "previous_role": "unknown",
+            "previous_duration_frames": 0,
+        }],
+        [{
+            "track_id": 10,
+            "global_id": "person_table_hist",
+            "action": "standing",
+            "zone_type": "table",
+            "pose_frame_count": 1,
+            "appearance_count": 0,
+            "previous_role": "unknown",
+            "previous_duration_frames": 95,
+        }],
+    ]
+
+    _, accumulators = run_single_cycle(obs_cycles[0], prior_accumulators=accumulators)
+    first_customer_score = accumulators["person_table_hist"]["customer_score"]
+
+    _, accumulators = run_single_cycle(obs_cycles[1], prior_accumulators=accumulators)
+    acc = accumulators["person_table_hist"]
+
+    print(f"  customer_score before/after = {first_customer_score:.1f} -> {acc['customer_score']:.1f}")
+    assert acc["customer_score"] >= first_customer_score + 10.0, "Table-sit history should add a large customer boost"
+    print("  ✅ PASSED")
+
+
 # ── Test 8: Decision output has all fields ────────────────────────────────
 
 def test_decision_output():
@@ -313,7 +450,10 @@ if __name__ == "__main__":
     test_reversal()
     test_merge()
     test_decision_output()
+    test_zone_history_tracks_transitions_and_patterns()
+    test_recent_sit_carryover_evidence()
+    test_table_sit_history_is_very_strong_customer_evidence()
 
     print("\n" + "=" * 60)
-    print("  All 8 tests passed ✅")
+    print("  All 11 tests passed ✅")
     print("=" * 60)
