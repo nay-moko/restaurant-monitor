@@ -43,7 +43,10 @@ class RestaurantTracker:
         
         updated_detections = []
         for track in tracks:
-            if not track.is_confirmed():
+            # اقبل التراكات الحديثة أيضًا حتى لا نضيع الأشخاص الجدد داخل المشهد
+            is_confirmed = track.is_confirmed() if hasattr(track, "is_confirmed") else True
+            time_since_update = getattr(track, "time_since_update", 0)
+            if not is_confirmed and time_since_update > 1:
                 continue
                 
             track_id = track.track_id

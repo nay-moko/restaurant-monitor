@@ -46,8 +46,8 @@ class ReIDGallery:
     # Crops smaller than this are too low-res/blurry for a trustworthy
     # embedding — accepting them into the gallery is exactly what causes
     # worker X's identity to get handed to unknown person Y.
-    MIN_CROP_WIDTH = 40
-    MIN_CROP_HEIGHT = 80
+    MIN_CROP_WIDTH = 32
+    MIN_CROP_HEIGHT = 64
 
     # A match must not just clear `threshold` — it must beat the runner-up
     # by at least this much. A "confidently wrong" match (0.66 vs 0.65) is

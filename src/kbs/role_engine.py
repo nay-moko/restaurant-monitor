@@ -117,7 +117,7 @@ class RoleDecision(Fact):
 # ── Constants ──────────────────────────────────────────────────────────────
 
 # Thresholds & decay
-CONFIRM_THRESHOLD   = 15.0   # min score to confirm a role
+CONFIRM_THRESHOLD   = 12.0   # min score to confirm a role
 CONFIRM_MARGIN      = 8.0    # must lead the other score by this much
 REVERSAL_MARGIN     = 12.0   # contrary score must exceed by this to reverse
 DECAY_RATE          = 0.997  # 90-second half-life at 3fps

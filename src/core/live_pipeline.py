@@ -102,7 +102,7 @@ class LivePipeline:
         # -- KBS engines (instantiated once, reset each frame) --------------
         self.action_kbs   = ActionKBS()
         # self.worker_kbs   = WorkerKBS()
-        # self.table_kbs    = TableKBS()
+        self.table_kbs    = TableKBS()
         self.reid_gallery = ReIDGallery()
         self.session_gallery = SessionGallery(ttl_seconds=1800)  # 30 mins TTL
 
@@ -121,6 +121,7 @@ class LivePipeline:
         # -- Table state ----------------------------------------------------
         self._table_customer_counts: dict[str, int]  = {}  # zone_id -> count
         self._table_was_served:      dict[str, bool] = {}  # zone_id -> served flag
+        self._table_states:           dict[str, str]  = {}  # zone_id -> state
         self.person_state: list[dict[str, Any]] = []
     # -----------------------------------------------------------------------
     # Public API
@@ -150,7 +151,8 @@ class LivePipeline:
                 frame, video_id, frame_index,
                 detections, keypoints_list, tracked_objects,
             )
-            self._run_kbs(tracked_objects, person_crops)
+
+        self._run_kbs(tracked_objects, person_crops)
 
         return {
             "camera_id":      camera_id,
@@ -160,6 +162,7 @@ class LivePipeline:
             "detections":     detections,
             "tracked_objects": tracked_objects,
             "person_crops":   person_crops,
+            "tables_current_state": self.get_tables_current_state(camera_id),
         }
 
     def enrich_tracks_with_zones(
@@ -241,6 +244,17 @@ class LivePipeline:
             })
 
         return crops
+
+    def get_tables_current_state(self, camera_id: str) -> dict[str, str]:
+        camera_zones = self.zone_manager.zones_config.get(camera_id, {}).get("zones", [])
+
+        summary: dict[str, str] = {}
+        for zone in camera_zones:
+            if zone.get("zone_type") in ("table", "table_area"):
+                zone_id = zone.get("zone_id")
+                if zone_id:
+                    summary[zone_id] = self._table_states.get(zone_id, "empty")
+        return summary
 
     def draw_zones(self, frame, camera_id: str) -> None:
         camera_zones = (
@@ -580,6 +594,13 @@ class LivePipeline:
             ))
 
         engine.run()
+        decisions = engine.get_decisions()
+
+        # أضف هذا التكرار لطباعة النقاط لكل شخص في الـ Terminal فورياً:
+        for track_id, info in decisions.items():
+            print(f"[Track {track_id}] ID: {info['global_id']} | Role: {info['role']} | Confidence: {info['confidence']}")
+            print(f"   -> Worker Score: {info['worker_score']} | Customer Score: {info['customer_score']}")
+            print("-" * 40)
 
         # Read RoleEngine decisions
         for tid, decision in engine.get_decisions().items():
@@ -663,6 +684,29 @@ class LivePipeline:
                 and zone_customer_counts.get(zone_id, 0) > 0
             ):
                 self._table_was_served[zone_id] = True
+
+        # -- TableKBS: derive empty / occupied / dirty ---------------------
+        all_zone_ids = (
+            set(zone_customer_counts)
+            | set(self._table_customer_counts)
+            | set(self._table_was_served)
+        )
+
+        self.table_kbs.reset()
+        for zone_id in all_zone_ids:
+            self.table_kbs.declare(TableFact(
+                zone_id=zone_id,
+                customer_count=zone_customer_counts.get(zone_id, 0),
+                was_served=self._table_was_served.get(zone_id, False),
+            ))
+        self.table_kbs.run()
+
+        self._table_states = {
+            fact["zone_id"]: fact["state"]
+            for fact in self.table_kbs.facts.values()
+            if isinstance(fact, TableFact)
+        }
+        self._table_customer_counts = zone_customer_counts
 
     # أضف هذا السطر في نهاية دالة _run_kbs للتحقق
         print("\n=== LIVE DATABASE STATE ===")

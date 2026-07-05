@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import cv2
+import numpy as np  # أضفنا numpy لرسم المضلعات
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
@@ -46,8 +47,57 @@ def load_first_video_path(videos_index_path: str) -> tuple[str, str, str]:
     if not records:
         raise ValueError(f"No video records found in: {index_path}")
 
-    first_record = records[0]
+    first_record = records[1]
     return first_record["path"], first_record["camera_id"], first_record["video_id"]
+
+
+# --- دالة الرسم المضافة لعرض حالة الطاولة حياً على الفريم ---
+def draw_custom_table_states(frame: np.ndarray, camera_id: str, pipeline: LivePipeline) -> None:
+    """تستعلم من الـ ZoneManager داخل البايبلاين لترسم حدود الطاولة بناء على حالتها الزمنية المستقرة."""
+    if pipeline is None:
+        return
+
+    # جلب ملخص الحالات الحالي من طبقة الـ pipeline نفسها حتى تشمل dirty/occupied/empty
+    tables_status = pipeline.get_tables_current_state(camera_id)
+    zone_mgr = getattr(pipeline, "zone_manager", None)
+    if zone_mgr is None:
+        return
+
+    camera_zones = zone_mgr.zones_config.get(camera_id, {}).get("zones", [])
+
+    for zone in camera_zones:
+        if zone.get("zone_type") in ("table", "table_area"):
+            table_id = zone.get("zone_id")
+            status = tables_status.get(table_id, "empty")
+
+            # تحديد اللون بناءً على حالة الذاكرة المؤقتة
+            if status == "occupied":
+                color = (0, 0, 255)  # BGR أحمر
+                text = f"{table_id}: Occupied"
+            elif status == "dirty":
+                color = (0, 165, 255)  # BGR برتقالي
+                text = f"{table_id}: Dirty"
+            else:
+                color = (0, 255, 0)  # BGR أخضر
+                text = f"{table_id}: Empty"
+
+            points = zone.get("points", [])
+            if len(points) >= 3:
+                pts = np.array(points, np.int32).reshape((-1, 1, 2))
+                # رسم خطوط الطاولة
+                cv2.polylines(frame, [pts], isClosed=True, color=color, thickness=2)
+
+                # كتابة النص التوضيحي للحالة فوق أول نقطة إحداثية للطاولة
+                text_position = (int(points[0][0]), int(points[0][1] - 10))
+                cv2.putText(
+                    frame,
+                    text,
+                    text_position,
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    color,
+                    2,
+                )
 
 
 def main() -> None:
@@ -67,7 +117,8 @@ def main() -> None:
         raise ValueError(f"Cannot open video source: {source}")
 
     fps = capture.get(cv2.CAP_PROP_FPS)
-    pose_stride = max(1, round(fps / 3)) if fps and fps > 0 else 10
+    # في العرض المباشر نحدّث الـ pose/action كل فريم لتسريع التعرف على العامل والأشخاص على الطاولات
+    pose_stride = 1
     frame_index = 0
     if args.start_sec is not None and fps and fps > 0:
         frame_index = int(args.start_sec * fps)
@@ -78,8 +129,6 @@ def main() -> None:
     if crop_dir is not None:
         crop_dir.mkdir(parents=True, exist_ok=True)
 
-    # We change the loop condition since frame_index might not start at 0
-    # max_frames should mean "process max N frames from the start point"
     frames_processed = 0
     try:
         while True:
@@ -102,8 +151,13 @@ def main() -> None:
             )
 
             try:
+                # 1. رسم المكونات الافتراضية للـ pipeline
                 pipeline.draw_zones(frame, camera_id)
                 pipeline.draw_tracks(frame, event["tracked_objects"])
+                
+                # 2. حقن التغيير هنا: تشغيل دالة التلوين المعتمدة على الذاكرة الزمنية المستقرة لحالة الطاولة
+                draw_custom_table_states(frame, camera_id, pipeline)
+                
             except Exception as e:
                 import traceback
                 print(f"[ERROR] draw crashed on frame {frame_index}: {e}")
@@ -118,7 +172,7 @@ def main() -> None:
             if args.show:
                 cv2.namedWindow("Restaurant Live Pipeline", cv2.WINDOW_NORMAL)
                 cv2.imshow("Restaurant Live Pipeline", frame)
-                key = cv2.waitKey(1) & 0xFF
+                key = cv2.waitKey(1) & 0xFF 
                 if key != 255:
                     print(f"[DEBUG] key pressed: {key} (chr: {chr(key) if key < 128 else '?'})")
                 if key == ord("q"):
