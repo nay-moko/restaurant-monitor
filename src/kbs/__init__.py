@@ -1,5 +1,4 @@
-from .action_kbs    import ActionKBS, PersonFact
-from .worker_kbs    import WorkerKBS, WorkerFact
+ 
 from .table_kbs     import TableKBS, TableFact
 from .reid_gallery  import ReIDGallery, SessionGallery
 from .role_engine   import (
@@ -12,9 +11,7 @@ from .role_engine   import (
     RoleDecision,
 )
 
-__all__ = [
-    "ActionKBS", "PersonFact",
-    "WorkerKBS", "WorkerFact",
+__all__ = [ 
     "TableKBS",  "TableFact",
     "ReIDGallery", "SessionGallery",
     "RoleEngine",

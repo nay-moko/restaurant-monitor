@@ -11,9 +11,7 @@ import torch
 
 from src.ai_models.detector import PersonDetector
 from src.ai_models.tracker import RestaurantTracker
-from src.zone_management.zone_manager import ZoneManager
-from src.kbs.action_kbs import ActionKBS, PersonFact
-from src.kbs.worker_kbs import WorkerKBS, WorkerFact
+from src.zone_management.zone_manager import ZoneManager 
 from src.kbs.table_kbs import TableKBS, TableFact
 from src.kbs.reid_gallery import ReIDGallery, SessionGallery
 from src.kbs.role_engine import (
@@ -98,9 +96,7 @@ class LivePipeline:
 
         # -- Zone manager ---------------------------------------------------
         self.zone_manager = ZoneManager()
-
-        # -- KBS engines (instantiated once, reset each frame) --------------
-        self.action_kbs   = ActionKBS()
+ 
         # self.worker_kbs   = WorkerKBS()
         self.table_kbs    = TableKBS()
         self.reid_gallery = ReIDGallery()
@@ -732,37 +728,4 @@ class LivePipeline:
         for row in self.person_state:
             print(f"ID: {row['global_id']} | Loc: {row['current_location']} | Entry: {row['Entrance date']} | Dur: {row['Duration']}")
         print("===========================\n")      
-        # # -- TableKBS -------------------------------------------------------
-        # self.table_kbs.reset()
-        # for zone_id in all_zone_ids:
-        #     self.table_kbs.declare(TableFact(
-        #         zone_id=zone_id,
-        #         customer_count=zone_customer_counts.get(zone_id, 0),
-        #         was_served=self._table_was_served.get(zone_id, False),
-        #     ))
-        # self.table_kbs.run()
-
-        # # -- WorkerKBS ------------------------------------------------------
-        # self.worker_kbs = WorkerKBS()
-        # self.worker_kbs.reset()
-        # for obj in tracked_objects:
-        #     tid  = obj["track_id"]
-        #     role = self._person_roles.get(tid, "unknown")
-        #     if role != "worker":
-        #         continue
-        #     global_id = self._global_ids.get(tid, f"local_{tid}")
-        #     self.worker_kbs.declare(WorkerFact(
-        #         global_id        = global_id,
-        #         action           = self._action_labels.get(tid, "unknown"),
-        #         zone_type        = obj.get("zone_type_normalized", "unknown"),
-        #         camera_type      = "customer_facing",
-        #         pose_frame_count = self._action_frame_counts.get(tid, 0),
-        #         re_id_ready      = False,
-        #     ))
-        # self.worker_kbs.run()
-
-        # # -- Read WorkerKBS results -----------------------------------------
-        # for fact in self.worker_kbs.facts.values():
-        #     if not isinstance(fact, WorkerFact):
-        #         continue
-        #     self._worker_states[fact["global_id"]] = fact["state"]
+        
