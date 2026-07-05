@@ -119,7 +119,7 @@ class LivePipeline:
         self._role_accumulators: dict[str, dict]  = {}  # global_id -> accumulator dict
 
         # -- Table state ----------------------------------------------------
-        self._table_customer_counts: dict[str, int]  = {}  # zone_id -> count
+        self._table_customer_counts: dict[str, int] = {}  # zone_id -> count
         self._table_was_served:      dict[str, bool] = {}  # zone_id -> served flag
         self._table_states:           dict[str, str]  = {}  # zone_id -> state
         self.person_state: list[dict[str, Any]] = []
@@ -714,22 +714,14 @@ class LivePipeline:
             print(f"ID: {row['global_id']} | Loc: {row['current_location']} | Entry: {row['Entrance date']} | Dur: {row['Duration']}")
         print("===========================\n")      
         # # -- TableKBS -------------------------------------------------------
-        # all_zone_ids = (
-        #     set(zone_customer_counts)
-        #     | set(self._table_customer_counts)
-        #     | set(self._table_was_served)
-        # )
-
-        # self.table_kbs = TableKBS()
         # self.table_kbs.reset()
         # for zone_id in all_zone_ids:
         #     self.table_kbs.declare(TableFact(
-        #         zone_id        = zone_id,
-        #         customer_count = zone_customer_counts.get(zone_id, 0),
-        #         was_served     = self._table_was_served.get(zone_id, False),
+        #         zone_id=zone_id,
+        #         customer_count=zone_customer_counts.get(zone_id, 0),
+        #         was_served=self._table_was_served.get(zone_id, False),
         #     ))
         # self.table_kbs.run()
-        # self._table_customer_counts = zone_customer_counts
 
         # # -- WorkerKBS ------------------------------------------------------
         # self.worker_kbs = WorkerKBS()

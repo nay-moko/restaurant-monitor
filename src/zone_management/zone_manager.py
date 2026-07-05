@@ -1,5 +1,4 @@
 import json
-import time  # ضفنا الوقت عشان نحسب الفارق الزمني للاستقرار
 from pathlib import Path
 from typing import Any
 
@@ -45,12 +44,6 @@ class ZoneManager:
 
         with open(self.zones_config_path, "r", encoding="utf-8") as f:
             self.zones_config = json.load(f)
-
-        # --- مخازن الذاكرة الزمنية ---
-        # هيكليةtables_state: { table_id: { "status": "empty"/"occupied", "last_seen": timestamp } }
-        self.tables_state: dict[str, dict[str, Any]] = {}
-        # لتتبع أول مرة الشخص قرب فيها على الطاولة منشان شرط الـ TIME_TO_OCCUPY
-        self.table_first_seen: dict[str, float] = {}
 
     def get_bbox_zone(
         self,
@@ -221,95 +214,6 @@ class ZoneManager:
                     return zone
         return None
 
-# --- التعديل الجوهري هنا (إدارة منطق الحالات الشامل للفريم) ---
-    def enrich_frame_result(
-        self, frame_result: dict[str, Any]
-    ) -> dict[str, Any]:
-        camera_id = frame_result.get("camera_id")
-        detections = frame_result.get("detections", [])
-        current_time = (
-            time.time()
-        )  # الوقت الحالي لمعالجة الفريم لحساب الفارق الزمني
-
-        enriched_detections = []
-        active_tables_this_frame = set()
-
-        # 1. فحص الديتكشنز ومعرفة الطاولات المستهدفة حالياً بالـ Frame
-        for detection in detections:
-            enriched = self.enrich_detection(camera_id, detection)
-            enriched_detections.append(enriched)
-
-            zone_info = enriched.get("zone", {})
-            # إذا الشخص تم ربطه بطاولة محددة (تطابق يدين أو نقطة مركز)
-            if zone_info.get("matched") and self._is_table_zone(zone_info.get("zone_type")):
-                table_id = zone_info.get("zone_id")
-                active_tables_this_frame.add(table_id)
-
-                # منطق الـ Entry: أول مرة منشوف الشخص عند هاي الطاولة
-                if table_id not in self.table_first_seen:
-                    self.table_first_seen[table_id] = current_time
-
-                # إذا قضى وقت كافي عند الطاولة، تقلب الحالة لـ "مشغولة"
-                duration = current_time - self.table_first_seen[table_id]
-                if duration >= self.TIME_TO_OCCUPY:
-                    self.tables_state[table_id] = {
-                        "status": "occupied",
-                        "last_seen": current_time,
-                    }
-
-        # 2. منطق الـ Exit والاستقرار الزمني للطاولات المشغولة التي لم تظهر بالفريم الحالي
-        for table_id, state in list(self.tables_state.items()):
-            if (
-                state["status"] == "occupied"
-                and table_id not in active_tables_this_frame
-            ):
-                # حساب كم صارلها الطاولة فاضية (لم يظهر عندها أحد)
-                idle_duration = current_time - state["last_seen"]
-                if idle_duration >= self.TIME_TO_VACATE:
-                    # تفريغ الطاولة بعد انتهاء مهلة الاستقرار
-                    self.tables_state[table_id] = {
-                        "status": "empty",
-                        "last_seen": current_time,
-                    }
-                    if table_id in self.table_first_seen:
-                        del self.table_first_seen[table_id]
-            elif table_id in active_tables_this_frame:
-                # إذا كانت مشغولة ولسه الشخص عندها، نحدث طابع آخر ظهور فقط
-                if self.tables_state.get(table_id, {}).get("status") == "occupied":
-                    self.tables_state[table_id]["last_seen"] = current_time
-
-        # تنظيف الـ first_seen للطاولات العابرة التي لم تصبح occupied وغادرها الشخص فوراً
-        for table_id in list(self.table_first_seen.keys()):
-            if (
-                table_id not in active_tables_this_frame
-                and table_id not in self.tables_state
-            ):
-                del self.table_first_seen[table_id]
-
-        # 3. حقن الحالات الكلية المحدثة داخل الفريم المخرج ليتسنى للمحرك قراءتها مباشرة
-        frame_result["detections"] = enriched_detections
-        frame_result["tables_current_state"] = (
-            self.get_all_tables_status_summary(camera_id)
-        )
-
-        return frame_result
-
-    def get_all_tables_status_summary(self, camera_id: str) -> dict[str, str]:
-        """تستخرج ملخص لحالة كل الطاولات الموجودة بالكونفيج للكاميرا المحددة."""
-        camera_zones = self.zones_config.get(camera_id, {})
-        zones = camera_zones.get("zones", [])
-
-        summary = {}
-        for zone in zones:
-            if self._is_table_zone(zone.get("zone_type")):
-                t_id = zone.get("zone_id")
-                # الافتراضي هو empty ما لم يسجل القاموس أنها occupied
-                current_status = self.tables_state.get(t_id, {}).get(
-                    "status", "empty"
-                )
-                summary[t_id] = current_status
-        return summary
-     
     def _zone_result(
         self,
         zone: dict[str, Any],
