@@ -117,6 +117,7 @@ class LivePipeline:
 
         # -- RoleEngine persistent state ------------------------------------
         self._role_accumulators: dict[str, dict]  = {}  # global_id -> accumulator dict
+        self._gid_track_counts: dict[str, set[int]] = {}  # global_id -> set of track_ids
 
         # -- Table state ----------------------------------------------------
         self._table_customer_counts: dict[str, int]  = {}  # zone_id -> count
@@ -488,12 +489,15 @@ class LivePipeline:
             action    = self._action_labels.get(tid, "unknown")
             zone_type = obj.get("zone_type_normalized", "unknown")
             key       = (action, zone_type)
+            previous_duration_frames = self._action_frame_counts.get(tid, 0)
 
             if self._last_action_zone.get(tid) != key:
                 self._action_frame_counts[tid] = 0
                 self._last_action_zone[tid]    = key
             else:
                 self._action_frame_counts[tid] = self._action_frame_counts.get(tid, 0) + 1
+
+            obj["previous_duration_frames"] = previous_duration_frames
 
         # -- Re-ID pre-check: match unknowns against existing gallery --------
         self.session_gallery.purge_old()
@@ -528,6 +532,7 @@ class LivePipeline:
             if matched_worker is not None:
                 self._person_roles[tid] = "worker"
                 self._global_ids[tid]   = matched_worker
+                self._gid_track_counts.setdefault(matched_worker, set()).add(tid)
                 print(f"[ReID] track {tid} matched permanent worker → {matched_worker}")
                 continue
 
@@ -535,6 +540,7 @@ class LivePipeline:
             matched_session = self.session_gallery.match(embedding)
             if matched_session is not None:
                 self._global_ids[tid] = matched_session
+                self._gid_track_counts.setdefault(matched_session, set()).add(tid)
                 self.session_gallery.update_seen(matched_session, embedding)
                 print(f"[ReID] track {tid} matched active session → {matched_session}")
                 continue
@@ -542,6 +548,7 @@ class LivePipeline:
             # 3. New person: register in Session Gallery
             new_session = self.session_gallery.register(embedding)
             self._global_ids[tid] = new_session
+            self._gid_track_counts.setdefault(new_session, set()).add(tid)
             print(f"[ReID] track {tid} registered as new session → {new_session}")
 
         # -- RoleEngine: classify all persons via point-based evidence ------
@@ -558,6 +565,7 @@ class LivePipeline:
                 cycle_count=acc["cycle_count"],
                 visited_tables=acc.get("visited_tables", ()),
                 visited_staff=acc.get("visited_staff", False),
+                zone_history=acc.get("zone_history", ()),
             ))
 
         # Declare one ObservationFact per tracked person
@@ -575,7 +583,8 @@ class LivePipeline:
                 zone_type        = obj.get("zone_type_normalized", "unknown"),
                 zone_id          = zone_id,
                 pose_frame_count = self._action_frame_counts.get(tid, 0),
-                appearance_count = 0,
+                previous_duration_frames = obj.get("previous_duration_frames", 0),
+                appearance_count = len(self._gid_track_counts.get(gid, set())),
                 previous_role    = self._person_roles.get(tid, "unknown"),
             ))
 
@@ -611,6 +620,16 @@ class LivePipeline:
                         acc = self._role_accumulators.pop(gid)
                         acc["global_id"] = new_worker_gid
                         self._role_accumulators[new_worker_gid] = acc
+                        
+                    # Transfer track counts
+                    if gid in self._gid_track_counts:
+                        counts = self._gid_track_counts.pop(gid)
+                        self._gid_track_counts.setdefault(new_worker_gid, set()).update(counts)
+                        
+                    # Rename in person_state to preserve duration
+                    for row in self.person_state:
+                        if row["global_id"] == gid:
+                            row["global_id"] = new_worker_gid
                         
                     # Remove from session gallery
                     self.session_gallery.remove(gid)
