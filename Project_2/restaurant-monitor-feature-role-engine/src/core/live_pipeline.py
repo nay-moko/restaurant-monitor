@@ -4,7 +4,7 @@ import json
 import pickle
 from pathlib import Path
 from typing import Any
-
+from src.core.central_state import CentralStateManager
 import cv2
 import numpy as np
 import torch
@@ -60,7 +60,8 @@ class LivePipeline:
 
         with open(self.config_path, "r", encoding="utf-8") as f:
             self.config = json.load(f)
-
+            
+        self.central_state = CentralStateManager()
         # -- Detector -------------------------------------------------------
         detector_config = self.config["detector"]
         self.detector = PersonDetector(
@@ -596,7 +597,7 @@ class LivePipeline:
 
             embedding = self.reid_gallery._extract(crop)
 
-            # 1. Check permanent Worker Gallery
+            # 1. أولاً: التحقق من معرض الموظفين الدائمين (العمال) محلياً
             matched_worker = self.reid_gallery._match(embedding)
             if matched_worker is not None:
                 self._person_roles[tid] = "worker"
@@ -605,20 +606,28 @@ class LivePipeline:
                 print(f"[ReID] track {tid} matched permanent worker → {matched_worker}")
                 continue
 
-            # 2. Check temporary Session Gallery
-            matched_session = self.session_gallery.match(embedding)
-            if matched_session is not None:
-                self._global_ids[tid] = matched_session
-                self._gid_track_counts.setdefault(matched_session, set()).add(tid)
-                self.session_gallery.update_seen(matched_session, embedding)
-                print(f"[ReID] track {tid} matched active session → {matched_session}")
-                continue
-
-            # 3. New person: register in Session Gallery
-            new_session = self.session_gallery.register(embedding)
-            self._global_ids[tid] = new_session
-            self._gid_track_counts.setdefault(new_session, set()).add(tid)
-            print(f"[ReID] track {tid} registered as new session → {new_session}")
+            # 2. ثانياً: إذا لم يكن عاملاً، نتحقق من الـ Redis المركزي لربط الهوية عبر جميع الكاميرات
+            try:
+                # نرسل الـ embedding للـ CentralStateManager ليعيد لنا ID موحد
+                global_session_id = self.central_state.update_person_identity(
+                    local_track_id=tid,
+                    reid_vector=embedding
+                )
+                self._global_ids[tid] = global_session_id
+                self._gid_track_counts.setdefault(global_session_id, set()).add(tid)
+                print(f"[Central ReID] track {tid} matched/registered centrally as → {global_session_id}")
+            except Exception as e:
+                # في حال فشل الاتصال بـ Redis، نعود للنظام المحلي لزملائك كخيار احتياطي (Fallback)
+                print(f"[Central ReID][ERROR] Redis failed, using local session registry: {e}")
+                matched_session = self.session_gallery.match(embedding)
+                if matched_session is not None:
+                    self._global_ids[tid] = matched_session
+                    self._gid_track_counts.setdefault(matched_session, set()).add(tid)
+                    self.session_gallery.update_seen(matched_session, embedding)
+                else:
+                    new_session = self.session_gallery.register(embedding)
+                    self._global_ids[tid] = new_session
+                    self._gid_track_counts.setdefault(new_session, set()).add(tid)
 
         # -- RoleEngine: classify all persons via point-based evidence ------
         engine = RoleEngine()
@@ -800,11 +809,37 @@ class LivePipeline:
             ))
         self.table_kbs.run()
 
-        self._table_states = {
+        # 1. تحديث الحالات المحلية من الـ TableKBS الحالي
+        local_table_states = {
             fact["zone_id"]: fact["state"]
             for fact in self.table_kbs.facts.values()
             if isinstance(fact, TableFact)
         }
+        
+        # 2. إرسال الحالات المحسوبة محلياً من هذه الكاميرا إلى قاعدة البيانات المركزية
+        for table_id, state in local_table_states.items():
+            try:
+                self.central_state.update_table_status(
+                    table_id=table_id,
+                    status=state,
+                    camera_id=camera_id
+                )
+            except Exception as e:
+                print(f"[Central Table State][ERROR] Failed to update table {table_id} on Redis: {e}")
+
+        # 3. جلب الحالة الكلية المدمجة لجميع الطاولات من الـ Redis لعرضها ورسمها
+        self._table_states = {}
+        for table_id in all_zone_ids:
+            try:
+                central_data = self.central_state.get_table_status(table_id)
+                if central_data:
+                    self._table_states[table_id] = central_data.get("status", "empty")
+                else:
+                    self._table_states[table_id] = local_table_states.get(table_id, "empty")
+            except Exception as e:
+                # احتياط في حال توقف الـ Redis، نستخدم الحسابات المحلية
+                self._table_states[table_id] = local_table_states.get(table_id, "empty")
+
         self._table_customer_counts = zone_customer_counts
 
     # أضف هذا السطر في نهاية دالة _run_kbs للتحقق

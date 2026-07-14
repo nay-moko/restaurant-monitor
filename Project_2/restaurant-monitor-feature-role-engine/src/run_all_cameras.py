@@ -35,7 +35,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-
+import redis
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CAMERA_CONFIG = PROJECT_ROOT / "config" / "camera_config.json"
 DEFAULT_VIDEOS_INDEX = PROJECT_ROOT / "data" / "metadata" / "videos" / "videos_index.json"
@@ -331,6 +331,16 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    # --- إضافة كود تصفير الـ Redis هنا ---
+    try:
+        print("[orchestrator] جاري تصفير قاعدة بيانات Redis المشتركة لتبدأ الكاميرات بنظافة...")
+        r = redis.Redis(host='localhost', port=6379, db=0)
+        r.flushdb()
+        print("[orchestrator] تم تصفير قاعدة البيانات بنجاح.")
+    except Exception as e:
+        print(f"[orchestrator][WARNING] لم نتمكن من الاتصال بـ Redis لتصفيرها: {e}")
+    # -------------------------------------
+
     args = parse_args()
     extra_args = shlex.split(args.extra_args) if args.extra_args else None
 
