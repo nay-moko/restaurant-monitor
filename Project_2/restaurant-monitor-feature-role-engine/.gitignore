@@ -1,0 +1,58 @@
+# =========================
+# Python environment/cache
+# =========================
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# =========================
+# Jupyter
+# =========================
+.ipynb_checkpoints/
+notebooks/01_yolo_detection_test.ipynb
+
+# =========================
+# Raw videos and media
+# =========================
+data/raw_videos/
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+
+data/debug/detection/
+
+
+runs/
+
+
+restaurant-monitor-output.md
+restaurant-monitor-output.txt
+
+.env
+
+.DS_Store
+Thumbs.db
+*.log
+# =========================
+# Project Specific & Generated Data
+# =========================
+# حظر البيئة الافتراضية الخاصة بجهازكِ والتي تظهر في الـ status
+.restaurant_env/
+
+# حظر مجلدات الـ Crops والتحليلات والمخرجات لتجنب تكرار آلاف الصور والملفات
+data/debug/
+data/analysis/
+data/artifacts/
+data/processed/
+data/outputs/
+
+# حظر ملفات موديلات الـ YOLO والأوزان الضخمة (مثل yolov8n.pt المكتشف في المجلد الرئيسي)
+*.pt
+*.onnx
+*.weights
