@@ -78,6 +78,8 @@ class ScoreAccumulator(Fact):
     customer_score = Field(float, default=0.0)
     confirmed_role = Field(str,   default="unknown")
     cycle_count    = Field(int,   default=0)
+    confirmed_at_cycle = Field(int,   default=-1)
+    locked         = Field(bool,  default=False)
     visited_tables = Field(tuple, default=())
     visited_staff  = Field(bool,  default=False)
     zone_history   = Field(tuple, default=())
@@ -196,6 +198,8 @@ class RoleEngine(KnowledgeEngine):
             customer_score=0.0,
             confirmed_role=obs["previous_role"],
             cycle_count=0,
+            confirmed_at_cycle=-1,
+            locked=False,
             visited_tables=(),
             visited_staff=False,
             zone_history=(),
@@ -231,7 +235,7 @@ class RoleEngine(KnowledgeEngine):
     @Rule(
         ObservationFact(global_id=MATCH.gid, zone_type="table", zone_id=MATCH.zid),
         TEST(lambda zid: zid != "unknown"),
-        AS.acc << ScoreAccumulator(global_id=MATCH.gid, visited_tables=MATCH.vt),
+        AS.acc << ScoreAccumulator(locked=False, global_id=MATCH.gid, visited_tables=MATCH.vt),
         TEST(lambda zid, vt: zid not in vt),
         salience=100,
     )
@@ -242,7 +246,7 @@ class RoleEngine(KnowledgeEngine):
 
     @Rule(
         ObservationFact(global_id=MATCH.gid, zone_type="staff"),
-        AS.acc << ScoreAccumulator(global_id=MATCH.gid, visited_staff=False),
+        AS.acc << ScoreAccumulator(locked=False, global_id=MATCH.gid, visited_staff=False),
         salience=100,
     )
     def update_visited_staff(self, acc, gid):
@@ -257,7 +261,7 @@ class RoleEngine(KnowledgeEngine):
             pose_frame_count=MATCH.pfc,
             previous_duration_frames=MATCH.prev_pfc,
         ),
-        AS.acc << ScoreAccumulator(global_id=MATCH.gid, zone_history=MATCH.history),
+        AS.acc << ScoreAccumulator(locked=False, global_id=MATCH.gid, zone_history=MATCH.history),
         NOT(ZoneHistoryApplied(global_id=MATCH.gid)),
         salience=99,
     )
@@ -284,7 +288,7 @@ class RoleEngine(KnowledgeEngine):
 
     @Rule(
         ObservationFact(global_id=MATCH.gid, action="sitting", zone_type="table"),
-        AS.acc << ScoreAccumulator(global_id=MATCH.gid, customer_score=MATCH.cs),
+        AS.acc << ScoreAccumulator(locked=False, global_id=MATCH.gid, customer_score=MATCH.cs),
         NOT(EvidenceApplied(global_id=MATCH.gid, rule_tag="sit_table")),
         salience=50,
     )
@@ -300,7 +304,7 @@ class RoleEngine(KnowledgeEngine):
             zone_type="table", pose_frame_count=MATCH.pfc,
         ),
         TEST(lambda pfc: pfc > 10),
-        AS.acc << ScoreAccumulator(global_id=MATCH.gid, customer_score=MATCH.cs),
+        AS.acc << ScoreAccumulator(locked=False, global_id=MATCH.gid, customer_score=MATCH.cs),
         NOT(EvidenceApplied(global_id=MATCH.gid, rule_tag="sit_table_long")),
         salience=49,
     )
@@ -312,7 +316,7 @@ class RoleEngine(KnowledgeEngine):
 
     @Rule(
         ObservationFact(global_id=MATCH.gid, action="standing", zone_type="table"),
-        AS.acc << ScoreAccumulator(global_id=MATCH.gid, customer_score=MATCH.cs),
+        AS.acc << ScoreAccumulator(locked=False, global_id=MATCH.gid, customer_score=MATCH.cs),
         NOT(EvidenceApplied(global_id=MATCH.gid, rule_tag="stand_table")),
         salience=50,
     )
@@ -326,7 +330,7 @@ class RoleEngine(KnowledgeEngine):
 
     @Rule(
         ObservationFact(global_id=MATCH.gid, zone_type="staff"),
-        AS.acc << ScoreAccumulator(global_id=MATCH.gid, worker_score=MATCH.ws),
+        AS.acc << ScoreAccumulator(locked=False, global_id=MATCH.gid, worker_score=MATCH.ws),
         NOT(EvidenceApplied(global_id=MATCH.gid, rule_tag="staff_zone")),
         salience=50,
     )
@@ -342,7 +346,7 @@ class RoleEngine(KnowledgeEngine):
             pose_frame_count=MATCH.pfc,
         ),
         TEST(lambda pfc: pfc > 8),
-        AS.acc << ScoreAccumulator(global_id=MATCH.gid, worker_score=MATCH.ws),
+        AS.acc << ScoreAccumulator(locked=False, global_id=MATCH.gid, worker_score=MATCH.ws),
         NOT(EvidenceApplied(global_id=MATCH.gid, rule_tag="staff_zone_long")),
         salience=49,
     )
@@ -355,7 +359,7 @@ class RoleEngine(KnowledgeEngine):
     @Rule(
         ObservationFact(global_id=MATCH.gid, action="serving", pose_frame_count=MATCH.pfc),
         TEST(lambda pfc: pfc >= 4),
-        AS.acc << ScoreAccumulator(global_id=MATCH.gid, worker_score=MATCH.ws),
+        AS.acc << ScoreAccumulator(locked=False, global_id=MATCH.gid, worker_score=MATCH.ws),
         NOT(EvidenceApplied(global_id=MATCH.gid, rule_tag="serving")),
         salience=50,
     )
@@ -371,7 +375,7 @@ class RoleEngine(KnowledgeEngine):
             pose_frame_count=MATCH.pfc,
         ),
         TEST(lambda pfc: pfc > 6),
-        AS.acc << ScoreAccumulator(global_id=MATCH.gid, worker_score=MATCH.ws),
+        AS.acc << ScoreAccumulator(locked=False, global_id=MATCH.gid, worker_score=MATCH.ws),
         NOT(EvidenceApplied(global_id=MATCH.gid, rule_tag="serving_sustained")),
         salience=49,
     )
@@ -389,7 +393,7 @@ class RoleEngine(KnowledgeEngine):
 
     @Rule(
         ObservationFact(global_id=MATCH.gid, action="walking", zone_type="walk"),
-        AS.acc << ScoreAccumulator(
+        AS.acc << ScoreAccumulator(locked=False,
             global_id=MATCH.gid, worker_score=MATCH.ws, confirmed_role="worker",
         ),
         NOT(EvidenceApplied(global_id=MATCH.gid, rule_tag="walk_service")),
@@ -403,7 +407,7 @@ class RoleEngine(KnowledgeEngine):
 
     @Rule(
         ObservationFact(global_id=MATCH.gid, action="standing", zone_type="walk"),
-        AS.acc << ScoreAccumulator(
+        AS.acc << ScoreAccumulator(locked=False,
             global_id=MATCH.gid, worker_score=MATCH.ws, confirmed_role="worker",
         ),
         NOT(EvidenceApplied(global_id=MATCH.gid, rule_tag="stand_walk")),
@@ -421,7 +425,7 @@ class RoleEngine(KnowledgeEngine):
             zone_type=MATCH.zt,
         ),
         TEST(lambda zt: zt not in ("table", "unknown")),
-        AS.acc << ScoreAccumulator(global_id=MATCH.gid, worker_score=MATCH.ws),
+        AS.acc << ScoreAccumulator(locked=False, global_id=MATCH.gid, worker_score=MATCH.ws),
         NOT(EvidenceApplied(global_id=MATCH.gid, rule_tag="sit_nontable")),
         salience=50,
     )
@@ -435,7 +439,7 @@ class RoleEngine(KnowledgeEngine):
 
     @Rule(
         ObservationFact(global_id=MATCH.gid),
-        AS.acc << ScoreAccumulator(global_id=MATCH.gid, visited_tables=MATCH.vt, worker_score=MATCH.ws),
+        AS.acc << ScoreAccumulator(locked=False, global_id=MATCH.gid, visited_tables=MATCH.vt, worker_score=MATCH.ws),
         TEST(lambda vt: len(vt) >= 2),
         NOT(EvidenceApplied(global_id=MATCH.gid, rule_tag="multi_table")),
         salience=48,
@@ -448,7 +452,7 @@ class RoleEngine(KnowledgeEngine):
 
     @Rule(
         ObservationFact(global_id=MATCH.gid, zone_type="table"),
-        AS.acc << ScoreAccumulator(global_id=MATCH.gid, visited_staff=True, worker_score=MATCH.ws),
+        AS.acc << ScoreAccumulator(locked=False, global_id=MATCH.gid, visited_staff=True, worker_score=MATCH.ws),
         NOT(EvidenceApplied(global_id=MATCH.gid, rule_tag="staff_to_table")),
         salience=48,
     )
@@ -465,7 +469,7 @@ class RoleEngine(KnowledgeEngine):
 
     @Rule(
         ObservationFact(global_id=MATCH.gid, zone_type="table"),
-        AS.acc << ScoreAccumulator(
+        AS.acc << ScoreAccumulator(locked=False,
             global_id=MATCH.gid,
             zone_history=MATCH.history,
             worker_score=MATCH.ws,
@@ -483,7 +487,7 @@ class RoleEngine(KnowledgeEngine):
     @Rule(
         ObservationFact(global_id=MATCH.gid, action=MATCH.action, zone_type=MATCH.zt),
         TEST(lambda action, zt: action in ("standing", "walking") and zt != "table"),
-        AS.acc << ScoreAccumulator(
+        AS.acc << ScoreAccumulator(locked=False,
             global_id=MATCH.gid,
             zone_history=MATCH.history,
             customer_score=MATCH.cs,
@@ -501,7 +505,7 @@ class RoleEngine(KnowledgeEngine):
     @Rule(
         ObservationFact(global_id=MATCH.gid, zone_type="table", action=MATCH.action),
         TEST(lambda action: action != "sitting"),
-        AS.acc << ScoreAccumulator(
+        AS.acc << ScoreAccumulator(locked=False,
             global_id=MATCH.gid,
             zone_history=MATCH.history,
             customer_score=MATCH.cs,
@@ -524,7 +528,7 @@ class RoleEngine(KnowledgeEngine):
             appearance_count=MATCH.ac,
         ),
         TEST(lambda ac: ac > 2),
-        AS.acc << ScoreAccumulator(global_id=MATCH.gid, worker_score=MATCH.ws),
+        AS.acc << ScoreAccumulator(locked=False, global_id=MATCH.gid, worker_score=MATCH.ws),
         NOT(EvidenceApplied(global_id=MATCH.gid, rule_tag="reappear")),
         salience=48,
     )
@@ -540,7 +544,7 @@ class RoleEngine(KnowledgeEngine):
             appearance_count=MATCH.ac,
         ),
         TEST(lambda ac: ac > 4),
-        AS.acc << ScoreAccumulator(global_id=MATCH.gid, worker_score=MATCH.ws),
+        AS.acc << ScoreAccumulator(locked=False, global_id=MATCH.gid, worker_score=MATCH.ws),
         NOT(EvidenceApplied(global_id=MATCH.gid, rule_tag="reappear_high")),
         salience=47,
     )
@@ -553,66 +557,96 @@ class RoleEngine(KnowledgeEngine):
     # ── Confirmation: first-time role lock ─────────────────────────────
 
     @Rule(
-        AS.acc << ScoreAccumulator(
+        AS.acc << ScoreAccumulator(locked=False,
             global_id=MATCH.gid,
             customer_score=MATCH.cs,
             worker_score=MATCH.ws,
             confirmed_role="unknown",
+            cycle_count=MATCH.cc,
         ),
         TEST(lambda cs, ws: cs >= CONFIRM_THRESHOLD and (cs - ws) >= CONFIRM_MARGIN),
         salience=30,
     )
-    def confirm_customer(self, acc, gid, cs, ws):
+    def confirm_customer(self, acc, gid, cs, ws, cc):
         """Customer score crossed threshold with sufficient margin."""
         print(f"[RoleEngine] CONFIRM gid={gid} → customer (cs={cs}, ws={ws})")
-        self.modify(acc, confirmed_role="customer")
+        self.modify(acc, confirmed_role="customer", confirmed_at_cycle=cc)
 
     @Rule(
-        AS.acc << ScoreAccumulator(
+        AS.acc << ScoreAccumulator(locked=False,
             global_id=MATCH.gid,
             worker_score=MATCH.ws,
             customer_score=MATCH.cs,
             confirmed_role="unknown",
+            cycle_count=MATCH.cc,
         ),
         TEST(lambda ws, cs: ws >= CONFIRM_THRESHOLD and (ws - cs) >= CONFIRM_MARGIN),
         salience=30,
     )
-    def confirm_worker(self, acc, gid, ws, cs):
+    def confirm_worker(self, acc, gid, ws, cs, cc):
         """Worker score crossed threshold with sufficient margin."""
         print(f"[RoleEngine] CONFIRM gid={gid} → worker (ws={ws}, cs={cs})")
-        self.modify(acc, confirmed_role="worker")
+        self.modify(acc, confirmed_role="worker", confirmed_at_cycle=cc)
 
     # ── Reversal: override a sticky confirmation ───────────────────────
 
     @Rule(
-        AS.acc << ScoreAccumulator(
+        AS.acc << ScoreAccumulator(locked=False,
             global_id=MATCH.gid,
             confirmed_role="customer",
             worker_score=MATCH.ws,
             customer_score=MATCH.cs,
+            cycle_count=MATCH.cc,
         ),
         TEST(lambda ws, cs: (ws - cs) >= REVERSAL_MARGIN),
         salience=25,
     )
-    def reverse_to_worker(self, acc, gid, ws, cs):
+    def reverse_to_worker(self, acc, gid, ws, cs, cc):
         """Strong worker evidence overturns a customer confirmation."""
         print(f"[RoleEngine] REVERSAL gid={gid} customer → worker (ws={ws}, cs={cs})")
-        self.modify(acc, confirmed_role="worker")
+        self.modify(acc, confirmed_role="worker", confirmed_at_cycle=cc)
 
     @Rule(
-        AS.acc << ScoreAccumulator(
+        AS.acc << ScoreAccumulator(locked=False,
             global_id=MATCH.gid,
             confirmed_role="worker",
             customer_score=MATCH.cs,
             worker_score=MATCH.ws,
+            cycle_count=MATCH.cc,
         ),
         TEST(lambda cs, ws: (cs - ws) >= REVERSAL_MARGIN),
         salience=25,
     )
-    def reverse_to_customer(self, acc, gid, cs, ws):
+    def reverse_to_customer(self, acc, gid, cs, ws, cc):
         """Strong customer evidence overturns a worker confirmation."""
         print(f"[RoleEngine] REVERSAL gid={gid} worker → customer (cs={cs}, ws={ws})")
-        self.modify(acc, confirmed_role="customer")
+        self.modify(acc, confirmed_role="customer", confirmed_at_cycle=cc)
+
+    # ── Lock Role: permanently freeze a role after 900 cycles ──────────
+
+    @Rule(
+        AS.acc << ScoreAccumulator(
+            global_id=MATCH.gid,
+            confirmed_role=MATCH.role,
+            locked=False,
+            confirmed_at_cycle=MATCH.cac,
+            cycle_count=MATCH.cc,
+            worker_score=MATCH.ws,
+            customer_score=MATCH.cs,
+        ),
+        TEST(lambda role, cac, cc, ws, cs: (
+            role != "unknown" and
+            cac != -1 and
+            (cc - cac) >= 900 and
+            (max(ws, cs) / (ws + cs) if (ws + cs) > 0 else 0) >= 0.85
+        )),
+        salience=20,
+    )
+    def lock_role(self, acc, gid, role, cac, cc, ws, cs):
+        """Permanently lock the confirmed role after 900 cycles with high confidence."""
+        confidence = max(ws, cs) / (ws + cs) if (ws + cs) > 0 else 0
+        print(f"[RoleEngine] LOCK gid={gid} as {role} (duration_cycles={cc-cac}, confidence={confidence:.2f})")
+        self.modify(acc, locked=True)
 
     # ── Re-ID Merge: combine accumulators when track changes ───────────
 
@@ -625,24 +659,33 @@ class RoleEngine(KnowledgeEngine):
             global_id=MATCH.old_gid,
             worker_score=MATCH.old_ws,
             customer_score=MATCH.old_cs,
+            confirmed_at_cycle=MATCH.old_cac,
+            locked=MATCH.old_locked,
         ),
         AS.new_acc << ScoreAccumulator(
             global_id=MATCH.new_gid,
             worker_score=MATCH.new_ws,
             customer_score=MATCH.new_cs,
+            confirmed_at_cycle=MATCH.new_cac,
+            locked=MATCH.new_locked,
         ),
         salience=95,
     )
     def merge_accumulators(self, merge, old_acc, new_acc,
                            old_gid, new_gid,
-                           old_ws, old_cs, new_ws, new_cs):
+                           old_ws, old_cs, new_ws, new_cs,
+                           old_cac, new_cac, old_locked, new_locked):
         """Merge old accumulator into the new one and remove old."""
         old_history = old_acc["zone_history"]
         new_history = new_acc["zone_history"]
+        merged_locked = old_locked or new_locked
+        merged_cac = max(old_cac, new_cac)
         self.modify(new_acc,
             worker_score=round(new_ws + old_ws, 3),
             customer_score=round(new_cs + old_cs, 3),
             zone_history=self._trim_zone_history(old_history + new_history),
+            locked=merged_locked,
+            confirmed_at_cycle=merged_cac,
         )
         self.retract(old_acc)
         self.retract(merge)
@@ -709,6 +752,8 @@ class RoleEngine(KnowledgeEngine):
                     "customer_score": fact["customer_score"],
                     "confirmed_role": fact["confirmed_role"],
                     "cycle_count":    fact["cycle_count"],
+                    "confirmed_at_cycle": fact["confirmed_at_cycle"],
+                    "locked":         fact["locked"],
                     "visited_tables": fact["visited_tables"],
                     "visited_staff":  fact["visited_staff"],
                     "zone_history":   fact["zone_history"],
