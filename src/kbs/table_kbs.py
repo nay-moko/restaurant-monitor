@@ -18,7 +18,9 @@ This flag is cleared (reset to False) once the table returns to free
 AND has been cleaned (external signal, or timer — future work).
 """
 
+
 from src.kbs import _compat  # noqa: F401  (must precede `import experta` — see _compat.py)
+
 from experta import KnowledgeEngine, Fact, Field, Rule, AS, MATCH, TEST
 
 

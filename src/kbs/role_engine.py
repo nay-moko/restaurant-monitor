@@ -26,6 +26,7 @@ All zone_type values come from the pipeline's ZONE_TYPE_MAP:
   staff_area/buffet/cashier → "staff"
 """
 
+
 from src.kbs import _compat  # noqa: F401  (must precede `import experta` — see _compat.py)
 from experta import (
     KnowledgeEngine, Fact, Field, Rule, DefFacts,

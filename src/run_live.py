@@ -139,6 +139,7 @@ def draw_custom_table_states(frame: np.ndarray, camera_id: str, pipeline: LivePi
 def main() -> None:
     args = parse_args()
     pipeline = LivePipeline(config_path=args.config)
+
     process_fps = resolve_process_fps(pipeline.config)
 
     source = args.source
@@ -154,9 +155,14 @@ def main() -> None:
         raise ValueError(f"Cannot open video source: {source}")
 
     fps = capture.get(cv2.CAP_PROP_FPS)
+
     # يتم اشتقاق pose_stride من الـ fps الفعلي للفيديو ومعدل المعالجة المطلوب (process_fps)
     # في config.json، بدل قيمة ثابتة، حتى نستهدف نفس معدل المعالجة بغض النظر عن fps الكاميرا الأصلي
     pose_stride = compute_pose_stride(fps, process_fps)
+
+    # في العرض المباشر نحدّث الـ pose/action كل فريم لتسريع التعرف على العامل والأشخاص على الطاولات
+    pose_stride = 1
+
     frame_index = 0
     if args.start_sec is not None and fps and fps > 0:
         frame_index = int(args.start_sec * fps)

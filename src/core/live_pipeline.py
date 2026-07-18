@@ -4,7 +4,9 @@ import json
 import pickle
 from pathlib import Path
 from typing import Any
+
 from src.core.central_state import CentralStateManager
+
 import cv2
 import numpy as np
 import torch
@@ -18,6 +20,7 @@ from src.kbs.role_engine import (
     RoleEngine, ObservationFact, ScoreAccumulator, MergeRequest, RoleDecision,
 )
 from src.core.classifiers import PoseLSTM
+
 from src.core.pipeline_output import TrackOutput, FrameOutput
 
 
@@ -60,8 +63,10 @@ class LivePipeline:
 
         with open(self.config_path, "r", encoding="utf-8") as f:
             self.config = json.load(f)
+
             
         self.central_state = CentralStateManager()
+
         # -- Detector -------------------------------------------------------
         detector_config = self.config["detector"]
         self.detector = PersonDetector(
@@ -151,15 +156,8 @@ class LivePipeline:
                 detections, keypoints_list, tracked_objects,
             )
 
-        self._run_kbs(tracked_objects, person_crops, time_seconds, camera_id)
 
-        frame_output = self._build_frame_output(
-            camera_id=camera_id,
-            video_id=video_id,
-            frame_index=frame_index,
-            time_seconds=time_seconds,
-            tracked_objects=tracked_objects,
-        )
+        self._run_kbs(tracked_objects, person_crops)
 
         return {
             "camera_id":      camera_id,
@@ -170,8 +168,9 @@ class LivePipeline:
             "tracked_objects": tracked_objects,
             "person_crops":   person_crops,
             "tables_current_state": self.get_tables_current_state(camera_id),
-            "frame_output":   frame_output,
         }
+
+
 
     def enrich_tracks_with_zones(
         self,
@@ -264,6 +263,7 @@ class LivePipeline:
                     summary[zone_id] = self._table_states.get(zone_id, "empty")
         return summary
 
+
     def _build_track_output(self, obj: dict[str, Any]) -> TrackOutput:
         track_id = obj["track_id"]
         zone = obj.get("zone") or {}
@@ -304,6 +304,7 @@ class LivePipeline:
             tracks=[self._build_track_output(obj) for obj in tracked_objects],
             table_states=self.get_tables_current_state(camera_id),
         )
+
 
     def draw_zones(self, frame, camera_id: str) -> None:
         camera_zones = (
@@ -358,31 +359,25 @@ class LivePipeline:
     # -----------------------------------------------------------------------
     # Private helpers
     # -----------------------------------------------------------------------
-    def _update_person_state(self, global_id: str, local_id: int, zone_type: str, time_seconds: float):
-        """
-        تحديث قاعدة البيانات في الذاكرة (list of dicts) لكل شخص بناءً على وقت الفيديو (time_seconds).
-        """
-        from datetime import timedelta
 
-        if time_seconds is None:
-            raise ValueError(
-                "_update_person_state() requires a non-None time_seconds "
-                "(video-relative timestamp from frame_index / video_fps); "
-                "wall-clock time and frame counters are not valid substitutes."
-            )
+    def _update_person_state(self, global_id: str, local_id: int, zone_type: str):
+        """
+        تحديث قاعدة البيانات في الذاكرة (list of dicts) لكل شخص بناءً على الفريمات.
+        """
+        from datetime import datetime, timedelta
 
         # 1. البحث عن السجل الحالي للشخص عبر الـ global_id
         person_record = next((row for row in self.person_state if row["global_id"] == global_id), None)
-
+        
         # 2. إذا كان الشخص يظهر لأول مرة في النظام تماماً
         if person_record is None:
             new_row = {
                 "global_id": global_id,
                 "local_id": local_id,
                 "current_location": zone_type, # يتم تخزين الزون الموحدة (table, walk, staff)
-                "Entrance date": str(timedelta(seconds=int(time_seconds))),
-                "Duration": "0:00:00",
-                "_entrance_time_seconds": time_seconds, # وقت الفيديو عند الدخول لحساب المدة لاحقاً
+                "Entrance date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "Duration": "00:00:00",
+                "_internal_frames_count": 1 # عداد الفريمات الداخلي للحساب الدقيق
             }
             self.person_state.append(new_row)
             return
@@ -390,16 +385,21 @@ class LivePipeline:
         # 3. إذا كان الشخص موجوداً مسبقاً ولكن انتقل إلى زون جديدة
         if person_record["current_location"] != zone_type:
             person_record["current_location"] = zone_type
-            person_record["Entrance date"] = str(timedelta(seconds=int(time_seconds)))
-            person_record["_entrance_time_seconds"] = time_seconds
-            person_record["Duration"] = "0:00:00"
+            person_record["Entrance date"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            person_record["_internal_frames_count"] = 1
+            person_record["Duration"] = "00:00:00"
             person_record["local_id"] = local_id # تحديث الـ local_id في حال تغير بفعل الـ DeepSORT
         else:
-            # 4. الشخص لا يزال مستقراً في نفس المكان -> نحسب المدة من فرق وقت الفيديو
+            # 4. الشخص لا يزال مستقراً في نفس المكان -> نزيد عداد الفريمات
+            person_record["_internal_frames_count"] += 1
             person_record["local_id"] = local_id # نحدث الـ local_id باستمرار لضمان ربطه بالـ Bounding Box الحالي
-
-            elapsed_seconds = time_seconds - person_record["_entrance_time_seconds"]
-            person_record["Duration"] = str(timedelta(seconds=int(elapsed_seconds)))
+            
+            # حساب المدة الحقيقية: كل فريم يساوي نصف ثانية لأن النظام يعالج (2fps)
+            total_seconds = person_record["_internal_frames_count"] / 2.0
+            
+            # تحويل الثواني إلى صيغة وقت مقروءة ومطابقة لطلب المعيد (HH:MM:SS)
+            duration_timedelta = timedelta(seconds=int(total_seconds))
+            person_record["Duration"] = str(duration_timedelta) 
 
     def _extract_pose_from_detections(
         self,
@@ -540,13 +540,11 @@ class LivePipeline:
 
         self._action_labels[track_id] = self.label_encoder.classes_[pred]
 
-    def _run_kbs(
-        self,
-        tracked_objects: list[dict],
-        person_crops: list[dict],
-        time_seconds: float,
-        camera_id: str,
-    ) -> None:
+
+    
+
+    def _run_kbs(self, tracked_objects: list[dict], person_crops: list[dict]) -> None:
+
         crop_by_id = {
             c["track_id"]: c["crop"]
             for c in person_crops
@@ -597,7 +595,11 @@ class LivePipeline:
 
             embedding = self.reid_gallery._extract(crop)
 
+
             # 1. أولاً: التحقق من معرض الموظفين الدائمين (العمال) محلياً
+
+            # 1. Check permanent Worker Gallery
+
             matched_worker = self.reid_gallery._match(embedding)
             if matched_worker is not None:
                 self._person_roles[tid] = "worker"
@@ -605,6 +607,7 @@ class LivePipeline:
                 self._gid_track_counts.setdefault(matched_worker, set()).add(tid)
                 print(f"[ReID] track {tid} matched permanent worker → {matched_worker}")
                 continue
+
 
             # 2. ثانياً: إذا لم يكن عاملاً، نتحقق من الـ Redis المركزي لربط الهوية عبر جميع الكاميرات
             try:
@@ -628,6 +631,22 @@ class LivePipeline:
                     new_session = self.session_gallery.register(embedding)
                     self._global_ids[tid] = new_session
                     self._gid_track_counts.setdefault(new_session, set()).add(tid)
+
+            # 2. Check temporary Session Gallery
+            matched_session = self.session_gallery.match(embedding)
+            if matched_session is not None:
+                self._global_ids[tid] = matched_session
+                self._gid_track_counts.setdefault(matched_session, set()).add(tid)
+                self.session_gallery.update_seen(matched_session, embedding)
+                print(f"[ReID] track {tid} matched active session → {matched_session}")
+                continue
+
+            # 3. New person: register in Session Gallery
+            new_session = self.session_gallery.register(embedding)
+            self._global_ids[tid] = new_session
+            self._gid_track_counts.setdefault(new_session, set()).add(tid)
+            print(f"[ReID] track {tid} registered as new session → {new_session}")
+
 
         # -- RoleEngine: classify all persons via point-based evidence ------
         engine = RoleEngine()
@@ -736,8 +755,7 @@ class LivePipeline:
             self._update_person_state(
                 global_id=gid,
                 local_id=tid,
-                zone_type=zone_type,
-                time_seconds=time_seconds,
+                zone_type=zone_type
             )
         # -- Update table customer counts -----------------------------------
         zone_customer_counts: dict[str, int] = {}
@@ -770,35 +788,20 @@ class LivePipeline:
                 self._table_was_served[zone_id] = True
 
         # -- TableKBS: derive empty / occupied / dirty ---------------------
+
         # Anchor the zone_id universe on the camera's actually configured "table"
         # zones (the specific leaf zone_type, not the broader "table_area" container),
         # so a table with zero customer history since process start still gets a
         # TableFact declared (and shows up as "free") instead of silently vanishing.
-        camera_zones = self.zone_manager.zones_config.get(camera_id, {}).get("zones", [])
-        configured_table_zone_ids = {
-            zone.get("zone_id")
-            for zone in camera_zones
-            if zone.get("zone_type") == "table" and zone.get("zone_id")
-        }
+        
 
-        historical_zone_ids = (
+        all_zone_ids = (
+
             set(zone_customer_counts)
             | set(self._table_customer_counts)
             | set(self._table_was_served)
         )
 
-        # A zone_id with history that isn't among the configured table zones points to a
-        # data-consistency problem (stale config, renamed zone, etc.) — don't drop it, but
-        # make it visible.
-        unconfigured_zone_ids = historical_zone_ids - configured_table_zone_ids
-        for zone_id in unconfigured_zone_ids:
-            print(
-                f"[TableKBS][WARNING] camera_id={camera_id!r}: zone_id={zone_id!r} has "
-                f"customer/serving history but is not a configured 'table' zone in "
-                f"zones_config.json — including it in output anyway."
-            )
-
-        all_zone_ids = configured_table_zone_ids | historical_zone_ids
 
         self.table_kbs.reset()
         for zone_id in all_zone_ids:
@@ -809,37 +812,12 @@ class LivePipeline:
             ))
         self.table_kbs.run()
 
-        # 1. تحديث الحالات المحلية من الـ TableKBS الحالي
-        local_table_states = {
+
+        self._table_states = {
             fact["zone_id"]: fact["state"]
             for fact in self.table_kbs.facts.values()
             if isinstance(fact, TableFact)
         }
-        
-        # 2. إرسال الحالات المحسوبة محلياً من هذه الكاميرا إلى قاعدة البيانات المركزية
-        for table_id, state in local_table_states.items():
-            try:
-                self.central_state.update_table_status(
-                    table_id=table_id,
-                    status=state,
-                    camera_id=camera_id
-                )
-            except Exception as e:
-                print(f"[Central Table State][ERROR] Failed to update table {table_id} on Redis: {e}")
-
-        # 3. جلب الحالة الكلية المدمجة لجميع الطاولات من الـ Redis لعرضها ورسمها
-        self._table_states = {}
-        for table_id in all_zone_ids:
-            try:
-                central_data = self.central_state.get_table_status(table_id)
-                if central_data:
-                    self._table_states[table_id] = central_data.get("status", "empty")
-                else:
-                    self._table_states[table_id] = local_table_states.get(table_id, "empty")
-            except Exception as e:
-                # احتياط في حال توقف الـ Redis، نستخدم الحسابات المحلية
-                self._table_states[table_id] = local_table_states.get(table_id, "empty")
-
         self._table_customer_counts = zone_customer_counts
 
     # أضف هذا السطر في نهاية دالة _run_kbs للتحقق
