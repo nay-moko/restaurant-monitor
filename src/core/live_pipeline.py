@@ -5,15 +5,15 @@ import pickle
 from pathlib import Path
 from typing import Any
 
-from src.core.central_state import CentralStateManager
-
 import cv2
 import numpy as np
 import torch
 
 from src.ai_models.detector import PersonDetector
 from src.ai_models.tracker import RestaurantTracker
-from src.zone_management.zone_manager import ZoneManager 
+from src.zone_management.zone_manager import ZoneManager
+from src.kbs.action_kbs import ActionKBS, PersonFact
+from src.kbs.worker_kbs import WorkerKBS, WorkerFact
 from src.kbs.table_kbs import TableKBS, TableFact
 from src.kbs.reid_gallery import ReIDGallery, SessionGallery
 from src.kbs.role_engine import (
@@ -21,13 +21,10 @@ from src.kbs.role_engine import (
 )
 from src.core.classifiers import PoseLSTM
 
-from src.core.pipeline_output import TrackOutput, FrameOutput
-
 
 class LivePipeline:
     ZONE_TYPE_MAP: dict[str, str] = {
-        "table_area"           : "table",   # broad container zone
-        "table"                : "table",   # single table zone (nested inside table_area) — was missing, caused zone_type_normalized="unknown"
+        "table_area"           : "table",
         "service_path"         : "walk",
         "hallway"              : "walk",
         "corridor"             : "walk",
@@ -63,9 +60,6 @@ class LivePipeline:
 
         with open(self.config_path, "r", encoding="utf-8") as f:
             self.config = json.load(f)
-
-            
-        self.central_state = CentralStateManager()
 
         # -- Detector -------------------------------------------------------
         detector_config = self.config["detector"]
@@ -103,9 +97,11 @@ class LivePipeline:
 
         # -- Zone manager ---------------------------------------------------
         self.zone_manager = ZoneManager()
- 
+
+        # -- KBS engines (instantiated once, reset each frame) --------------
+        self.action_kbs   = ActionKBS()
         # self.worker_kbs   = WorkerKBS()
-        self.table_kbs    = TableKBS()
+        # self.table_kbs    = TableKBS()
         self.reid_gallery = ReIDGallery()
         self.session_gallery = SessionGallery(ttl_seconds=1800)  # 30 mins TTL
 
@@ -113,6 +109,7 @@ class LivePipeline:
 
         # -- Per-track state ------------------------------------------------
         self._person_roles:        dict[int, str]   = {}  # track_id -> role
+        self._active_states:       dict[int, str]   = {}  # track_id -> active_state
         self._global_ids:          dict[int, str]   = {}  # track_id -> global_id
         self._action_frame_counts: dict[int, int]   = {}  # track_id -> consecutive frames
         self._last_action_zone:    dict[int, tuple] = {}  # track_id -> (action, zone_type)
@@ -120,13 +117,11 @@ class LivePipeline:
 
         # -- RoleEngine persistent state ------------------------------------
         self._role_accumulators: dict[str, dict]  = {}  # global_id -> accumulator dict
-        self._gid_track_counts: dict[str, set[int]] = {}  # global_id -> set of track_ids
 
         # -- Table state ----------------------------------------------------
-        self._table_customer_counts: dict[str, int] = {}  # zone_id -> count
+        self._table_customer_counts: dict[str, int]  = {}  # zone_id -> count
         self._table_was_served:      dict[str, bool] = {}  # zone_id -> served flag
-        self._table_states:           dict[str, str]  = {}  # zone_id -> state
-        self.person_state: list[dict[str, Any]] = []
+
     # -----------------------------------------------------------------------
     # Public API
     # -----------------------------------------------------------------------
@@ -155,9 +150,7 @@ class LivePipeline:
                 frame, video_id, frame_index,
                 detections, keypoints_list, tracked_objects,
             )
-
-
-        self._run_kbs(tracked_objects, person_crops)
+            self._run_kbs(tracked_objects, person_crops)
 
         return {
             "camera_id":      camera_id,
@@ -167,10 +160,7 @@ class LivePipeline:
             "detections":     detections,
             "tracked_objects": tracked_objects,
             "person_crops":   person_crops,
-            "tables_current_state": self.get_tables_current_state(camera_id),
         }
-
-
 
     def enrich_tracks_with_zones(
         self,
@@ -182,7 +172,6 @@ class LivePipeline:
         enriched_tracks: list[dict[str, Any]] = []
 
         pose_points_by_track_id: dict[int, list[int]] = {}
-        kpts_by_track_id: dict[int, np.ndarray] = {}
         if detections and keypoints_list:
             for det, kpts in zip(detections, keypoints_list):
                 if kpts is None:
@@ -193,21 +182,18 @@ class LivePipeline:
                     continue
 
                 pose_points_by_track_id[track_id] = self._estimate_zone_point(det.get("box", [0, 0, 0, 0]), kpts)
-                kpts_by_track_id[track_id] = kpts
 
         for obj in tracked_objects:
             track_id = obj.get("track_id")
             box = obj.get("box", [0, 0, 0, 0])
             zone_point = pose_points_by_track_id.get(track_id)
-            kpts = kpts_by_track_id.get(track_id)
 
             if zone_point is None:
                 zone_point = self._estimate_zone_point(box, None)
 
-            zone = self.zone_manager.get_bbox_zone(
+            zone = self.zone_manager.get_point_zone(
                 camera_id=camera_id,
-                box=box,
-                keypoints=kpts,
+                point=zone_point,
             )
             enriched_obj = dict(obj)
             enriched_obj["zone"] = zone
@@ -215,6 +201,7 @@ class LivePipeline:
             enriched_obj["zone_type_normalized"] = self.ZONE_TYPE_MAP.get(raw_zone_type, "unknown")
             enriched_obj["zone_name"] = zone.get("zone_name", "Unknown") if zone else "Unknown"
             enriched_obj["zone_point"] = zone_point
+            enriched_obj["active_state"] = self._active_states.get(track_id, "active")
             enriched_tracks.append(enriched_obj)
 
         return enriched_tracks
@@ -251,60 +238,6 @@ class LivePipeline:
             })
 
         return crops
-
-    def get_tables_current_state(self, camera_id: str) -> dict[str, str]:
-        camera_zones = self.zone_manager.zones_config.get(camera_id, {}).get("zones", [])
-
-        summary: dict[str, str] = {}
-        for zone in camera_zones:
-            if zone.get("zone_type") in ("table", "table_area"):
-                zone_id = zone.get("zone_id")
-                if zone_id:
-                    summary[zone_id] = self._table_states.get(zone_id, "empty")
-        return summary
-
-
-    def _build_track_output(self, obj: dict[str, Any]) -> TrackOutput:
-        track_id = obj["track_id"]
-        zone = obj.get("zone") or {}
-        zone_matched = bool(zone.get("matched"))
-
-        return TrackOutput(
-            track_id=track_id,
-            global_id=self._global_ids.get(track_id, f"local_{track_id}"),
-            bbox=[float(v) for v in obj.get("box", [0.0, 0.0, 0.0, 0.0])],
-            # zone_id is None when no zone was matched -- "unknown" there is
-            # only ever a not-found sentinel, never a real identifier.
-            zone_id=zone.get("zone_id") if zone_matched else None,
-            # zone_type is the normalized bucket (table/walk/staff/unknown)
-            # everything else in this pipeline keys off (see ZONE_TYPE_MAP,
-            # RoleEngine, TableKBS) -- "unknown" here is a real category
-            # (an unclassified zone), not an absence sentinel, so it is kept
-            # as-is rather than converted to None.
-            zone_type=obj.get("zone_type_normalized", "unknown"),
-            role=self._person_roles.get(track_id, "unknown"),
-            confidence=obj.get("conf"),
-            action=self._action_labels.get(track_id),
-            zone_name=zone.get("zone_name") if zone_matched else None,
-        )
-
-    def _build_frame_output(
-        self,
-        camera_id: str,
-        video_id: str,
-        frame_index: int,
-        time_seconds: float,
-        tracked_objects: list[dict[str, Any]],
-    ) -> FrameOutput:
-        return FrameOutput(
-            camera_id=camera_id,
-            video_id=video_id,
-            frame_index=frame_index,
-            time_seconds=time_seconds,
-            tracks=[self._build_track_output(obj) for obj in tracked_objects],
-            table_states=self.get_tables_current_state(camera_id),
-        )
-
 
     def draw_zones(self, frame, camera_id: str) -> None:
         camera_zones = (
@@ -359,47 +292,6 @@ class LivePipeline:
     # -----------------------------------------------------------------------
     # Private helpers
     # -----------------------------------------------------------------------
-
-    def _update_person_state(self, global_id: str, local_id: int, zone_type: str):
-        """
-        تحديث قاعدة البيانات في الذاكرة (list of dicts) لكل شخص بناءً على الفريمات.
-        """
-        from datetime import datetime, timedelta
-
-        # 1. البحث عن السجل الحالي للشخص عبر الـ global_id
-        person_record = next((row for row in self.person_state if row["global_id"] == global_id), None)
-        
-        # 2. إذا كان الشخص يظهر لأول مرة في النظام تماماً
-        if person_record is None:
-            new_row = {
-                "global_id": global_id,
-                "local_id": local_id,
-                "current_location": zone_type, # يتم تخزين الزون الموحدة (table, walk, staff)
-                "Entrance date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "Duration": "00:00:00",
-                "_internal_frames_count": 1 # عداد الفريمات الداخلي للحساب الدقيق
-            }
-            self.person_state.append(new_row)
-            return
-
-        # 3. إذا كان الشخص موجوداً مسبقاً ولكن انتقل إلى زون جديدة
-        if person_record["current_location"] != zone_type:
-            person_record["current_location"] = zone_type
-            person_record["Entrance date"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            person_record["_internal_frames_count"] = 1
-            person_record["Duration"] = "00:00:00"
-            person_record["local_id"] = local_id # تحديث الـ local_id في حال تغير بفعل الـ DeepSORT
-        else:
-            # 4. الشخص لا يزال مستقراً في نفس المكان -> نزيد عداد الفريمات
-            person_record["_internal_frames_count"] += 1
-            person_record["local_id"] = local_id # نحدث الـ local_id باستمرار لضمان ربطه بالـ Bounding Box الحالي
-            
-            # حساب المدة الحقيقية: كل فريم يساوي نصف ثانية لأن النظام يعالج (2fps)
-            total_seconds = person_record["_internal_frames_count"] / 2.0
-            
-            # تحويل الثواني إلى صيغة وقت مقروءة ومطابقة لطلب المعيد (HH:MM:SS)
-            duration_timedelta = timedelta(seconds=int(total_seconds))
-            person_record["Duration"] = str(duration_timedelta) 
 
     def _extract_pose_from_detections(
         self,
@@ -540,11 +432,7 @@ class LivePipeline:
 
         self._action_labels[track_id] = self.label_encoder.classes_[pred]
 
-
-    
-
     def _run_kbs(self, tracked_objects: list[dict], person_crops: list[dict]) -> None:
-
         crop_by_id = {
             c["track_id"]: c["crop"]
             for c in person_crops
@@ -557,15 +445,12 @@ class LivePipeline:
             action    = self._action_labels.get(tid, "unknown")
             zone_type = obj.get("zone_type_normalized", "unknown")
             key       = (action, zone_type)
-            previous_duration_frames = self._action_frame_counts.get(tid, 0)
 
             if self._last_action_zone.get(tid) != key:
                 self._action_frame_counts[tid] = 0
                 self._last_action_zone[tid]    = key
             else:
                 self._action_frame_counts[tid] = self._action_frame_counts.get(tid, 0) + 1
-
-            obj["previous_duration_frames"] = previous_duration_frames
 
         # -- Re-ID pre-check: match unknowns against existing gallery --------
         self.session_gallery.purge_old()
@@ -583,60 +468,21 @@ class LivePipeline:
             crop = crop_by_id.get(tid)
             if crop is None:
                 continue
-
-            # Crop too small/low-res → embedding is unreliable and is exactly
-            # what causes worker X's identity to get handed to a blurry,
-            # unrelated person Y. Skip ReID this frame; track stays without
-            # a global_id and will be retried once a better crop comes in.
-            crop_h, crop_w = crop.shape[:2]
-            if crop_w < self.reid_gallery.MIN_CROP_WIDTH or crop_h < self.reid_gallery.MIN_CROP_HEIGHT:
-                print(f"[ReID] track {tid}: crop too small ({crop_w}x{crop_h}) — skipping ReID this frame")
-                continue
-
+                
             embedding = self.reid_gallery._extract(crop)
 
-
-            # 1. أولاً: التحقق من معرض الموظفين الدائمين (العمال) محلياً
-
             # 1. Check permanent Worker Gallery
-
             matched_worker = self.reid_gallery._match(embedding)
             if matched_worker is not None:
                 self._person_roles[tid] = "worker"
                 self._global_ids[tid]   = matched_worker
-                self._gid_track_counts.setdefault(matched_worker, set()).add(tid)
                 print(f"[ReID] track {tid} matched permanent worker → {matched_worker}")
                 continue
-
-
-            # 2. ثانياً: إذا لم يكن عاملاً، نتحقق من الـ Redis المركزي لربط الهوية عبر جميع الكاميرات
-            try:
-                # نرسل الـ embedding للـ CentralStateManager ليعيد لنا ID موحد
-                global_session_id = self.central_state.update_person_identity(
-                    local_track_id=tid,
-                    reid_vector=embedding
-                )
-                self._global_ids[tid] = global_session_id
-                self._gid_track_counts.setdefault(global_session_id, set()).add(tid)
-                print(f"[Central ReID] track {tid} matched/registered centrally as → {global_session_id}")
-            except Exception as e:
-                # في حال فشل الاتصال بـ Redis، نعود للنظام المحلي لزملائك كخيار احتياطي (Fallback)
-                print(f"[Central ReID][ERROR] Redis failed, using local session registry: {e}")
-                matched_session = self.session_gallery.match(embedding)
-                if matched_session is not None:
-                    self._global_ids[tid] = matched_session
-                    self._gid_track_counts.setdefault(matched_session, set()).add(tid)
-                    self.session_gallery.update_seen(matched_session, embedding)
-                else:
-                    new_session = self.session_gallery.register(embedding)
-                    self._global_ids[tid] = new_session
-                    self._gid_track_counts.setdefault(new_session, set()).add(tid)
 
             # 2. Check temporary Session Gallery
             matched_session = self.session_gallery.match(embedding)
             if matched_session is not None:
                 self._global_ids[tid] = matched_session
-                self._gid_track_counts.setdefault(matched_session, set()).add(tid)
                 self.session_gallery.update_seen(matched_session, embedding)
                 print(f"[ReID] track {tid} matched active session → {matched_session}")
                 continue
@@ -644,9 +490,7 @@ class LivePipeline:
             # 3. New person: register in Session Gallery
             new_session = self.session_gallery.register(embedding)
             self._global_ids[tid] = new_session
-            self._gid_track_counts.setdefault(new_session, set()).add(tid)
             print(f"[ReID] track {tid} registered as new session → {new_session}")
-
 
         # -- RoleEngine: classify all persons via point-based evidence ------
         engine = RoleEngine()
@@ -662,7 +506,6 @@ class LivePipeline:
                 cycle_count=acc["cycle_count"],
                 visited_tables=acc.get("visited_tables", ()),
                 visited_staff=acc.get("visited_staff", False),
-                zone_history=acc.get("zone_history", ()),
             ))
 
         # Declare one ObservationFact per tracked person
@@ -680,29 +523,25 @@ class LivePipeline:
                 zone_type        = obj.get("zone_type_normalized", "unknown"),
                 zone_id          = zone_id,
                 pose_frame_count = self._action_frame_counts.get(tid, 0),
-                previous_duration_frames = obj.get("previous_duration_frames", 0),
-                appearance_count = len(self._gid_track_counts.get(gid, set())),
+                appearance_count = 0,
                 previous_role    = self._person_roles.get(tid, "unknown"),
             ))
 
         engine.run()
-        decisions = engine.get_decisions()
-
-        # أضف هذا التكرار لطباعة النقاط لكل شخص في الـ Terminal فورياً:
-        for track_id, info in decisions.items():
-            print(f"[Track {track_id}] ID: {info['global_id']} | Role: {info['role']} | Confidence: {info['confidence']}")
-            print(f"   -> Worker Score: {info['worker_score']} | Customer Score: {info['customer_score']}")
-            print("-" * 40)
 
         # Read RoleEngine decisions
         for tid, decision in engine.get_decisions().items():
             role = decision["role"]
+            active_state = decision.get("active_state", "active")
             if role != "unknown":
                 self._person_roles[tid] = role
+            self._active_states[tid] = active_state
+
             # Log scores for debugging
             print(
                 f"  [RoleEngine] track {tid}: "
                 f"role={decision['role']}  "
+                f"active_state={active_state}  "
                 f"conf={decision['confidence']:.2f}  "
                 f"ws={decision['worker_score']:.1f}  "
                 f"cs={decision['customer_score']:.1f}"
@@ -725,38 +564,17 @@ class LivePipeline:
                         acc["global_id"] = new_worker_gid
                         self._role_accumulators[new_worker_gid] = acc
                         
-                    # Transfer track counts
-                    if gid in self._gid_track_counts:
-                        counts = self._gid_track_counts.pop(gid)
-                        self._gid_track_counts.setdefault(new_worker_gid, set()).update(counts)
-                        
-                    # Rename in person_state to preserve duration
-                    for row in self.person_state:
-                        if row["global_id"] == gid:
-                            row["global_id"] = new_worker_gid
-                        
                     # Remove from session gallery
                     self.session_gallery.remove(gid)
                     print(f"[ReID] Promoted {gid} to permanent worker → {new_worker_gid}")
 
         # Persist accumulators for next cycle
         self._role_accumulators = engine.get_accumulators()
+
         for obj in tracked_objects:
             tid = obj["track_id"]
-            
-            # الحصول على الـ global_id الموحد المحسوب بواسطة الـ ReID والـ RoleEngine
-            # وإذا لم يكن مسجلاً بعد كعامل، نأخذ المعرف المؤقت المعتمد في كودكم [source: 1]
-            gid = self._global_ids.get(tid, f"local_{tid}") 
-            
-            # الحصول على اسم الزون الموحد الجاهز في الكود (table, walk, staff) [source: 1]
-            zone_type = obj.get("zone_type_normalized", "unknown") 
-            
-            # استدعاء دالة التحديث لبناء الـ list of dicts وحساب الـ duration
-            self._update_person_state(
-                global_id=gid,
-                local_id=tid,
-                zone_type=zone_type
-            )
+            obj["active_state"] = self._active_states.get(tid, "active")
+
         # -- Update table customer counts -----------------------------------
         zone_customer_counts: dict[str, int] = {}
         for obj in tracked_objects:
@@ -787,42 +605,45 @@ class LivePipeline:
             ):
                 self._table_was_served[zone_id] = True
 
-        # -- TableKBS: derive empty / occupied / dirty ---------------------
+        # # -- TableKBS -------------------------------------------------------
+        # all_zone_ids = (
+        #     set(zone_customer_counts)
+        #     | set(self._table_customer_counts)
+        #     | set(self._table_was_served)
+        # )
 
-        # Anchor the zone_id universe on the camera's actually configured "table"
-        # zones (the specific leaf zone_type, not the broader "table_area" container),
-        # so a table with zero customer history since process start still gets a
-        # TableFact declared (and shows up as "free") instead of silently vanishing.
-        
+        # self.table_kbs = TableKBS()
+        # self.table_kbs.reset()
+        # for zone_id in all_zone_ids:
+        #     self.table_kbs.declare(TableFact(
+        #         zone_id        = zone_id,
+        #         customer_count = zone_customer_counts.get(zone_id, 0),
+        #         was_served     = self._table_was_served.get(zone_id, False),
+        #     ))
+        # self.table_kbs.run()
+        # self._table_customer_counts = zone_customer_counts
 
-        all_zone_ids = (
+        # # -- WorkerKBS ------------------------------------------------------
+        # self.worker_kbs = WorkerKBS()
+        # self.worker_kbs.reset()
+        # for obj in tracked_objects:
+        #     tid  = obj["track_id"]
+        #     role = self._person_roles.get(tid, "unknown")
+        #     if role != "worker":
+        #         continue
+        #     global_id = self._global_ids.get(tid, f"local_{tid}")
+        #     self.worker_kbs.declare(WorkerFact(
+        #         global_id        = global_id,
+        #         action           = self._action_labels.get(tid, "unknown"),
+        #         zone_type        = obj.get("zone_type_normalized", "unknown"),
+        #         camera_type      = "customer_facing",
+        #         pose_frame_count = self._action_frame_counts.get(tid, 0),
+        #         re_id_ready      = False,
+        #     ))
+        # self.worker_kbs.run()
 
-            set(zone_customer_counts)
-            | set(self._table_customer_counts)
-            | set(self._table_was_served)
-        )
-
-
-        self.table_kbs.reset()
-        for zone_id in all_zone_ids:
-            self.table_kbs.declare(TableFact(
-                zone_id=zone_id,
-                customer_count=zone_customer_counts.get(zone_id, 0),
-                was_served=self._table_was_served.get(zone_id, False),
-            ))
-        self.table_kbs.run()
-
-
-        self._table_states = {
-            fact["zone_id"]: fact["state"]
-            for fact in self.table_kbs.facts.values()
-            if isinstance(fact, TableFact)
-        }
-        self._table_customer_counts = zone_customer_counts
-
-    # أضف هذا السطر في نهاية دالة _run_kbs للتحقق
-        print("\n=== LIVE DATABASE STATE ===")
-        for row in self.person_state:
-            print(f"ID: {row['global_id']} | Loc: {row['current_location']} | Entry: {row['Entrance date']} | Dur: {row['Duration']}")
-        print("===========================\n")      
-        
+        # # -- Read WorkerKBS results -----------------------------------------
+        # for fact in self.worker_kbs.facts.values():
+        #     if not isinstance(fact, WorkerFact):
+        #         continue
+        #     self._worker_states[fact["global_id"]] = fact["state"]

@@ -115,6 +115,7 @@ class RoleDecision(Fact):
     track_id       : int
     global_id      : str
     role           : str   – "unknown"|"customer"|"worker"
+    active_state   : str   – "active"|"inactive"
     confidence     : float – 0.0 to 1.0
     worker_score   : float
     customer_score : float
@@ -122,6 +123,7 @@ class RoleDecision(Fact):
     track_id       = Field(int,   mandatory=True)
     global_id      = Field(str,   mandatory=True)
     role           = Field(str,   default="unknown")
+    active_state   = Field(str,   default="active")
     confidence     = Field(float, default=0.0)
     worker_score   = Field(float, default=0.0)
     customer_score = Field(float, default=0.0)
@@ -714,10 +716,15 @@ class RoleEngine(KnowledgeEngine):
             dominant = max(ws, cs)
             confidence = round(dominant / total, 3)
 
+        active_state = "active"
+        if role == "worker" and obs["action"] == "sitting" and obs["zone_type"] == "staff":
+            active_state = "inactive"
+
         self.declare(RoleDecision(
             track_id=tid,
             global_id=gid,
             role=role,
+            active_state=active_state,
             confidence=confidence,
             worker_score=ws,
             customer_score=cs,
@@ -726,13 +733,14 @@ class RoleEngine(KnowledgeEngine):
     # ── Public helper: extract decisions after run() ───────────────────
 
     def get_decisions(self) -> dict:
-        """Return {track_id: {role, confidence, worker_score, customer_score}}."""
+        """Return {track_id: {role, active_state, confidence, worker_score, customer_score}}."""
         results = {}
         for fact in self.facts.values():
             if isinstance(fact, RoleDecision):
                 results[fact["track_id"]] = {
                     "global_id":      fact["global_id"],
                     "role":           fact["role"],
+                    "active_state":   fact["active_state"],
                     "confidence":     fact["confidence"],
                     "worker_score":   fact["worker_score"],
                     "customer_score": fact["customer_score"],
