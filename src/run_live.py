@@ -155,6 +155,7 @@ def main() -> None:
         raise ValueError(f"Cannot open video source: {source}")
 
     fps = capture.get(cv2.CAP_PROP_FPS)
+    pipeline.set_frame_rate(fps)
 
     # يتم اشتقاق pose_stride من الـ fps الفعلي للفيديو ومعدل المعالجة المطلوب (process_fps)
     # في config.json، بدل قيمة ثابتة، حتى نستهدف نفس معدل المعالجة بغض النظر عن fps الكاميرا الأصلي

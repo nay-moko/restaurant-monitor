@@ -66,7 +66,7 @@ class ZoneManager:
         table_hit, table_hit_method = self._find_table_by_hands(zones, keypoints)
         if table_hit is not None:
             return self._zone_result(
-                table_hit, 100.0, box, method=table_hit_method
+                table_hit, 100.0, box, method=table_hit_method, zone_specificity="specific"
             )
 
         # -- Step 1b: skeleton check for walk zones --
@@ -136,12 +136,12 @@ class ZoneManager:
 
         if table_specific_zone is not None:
             return self._zone_result(
-                table_specific_zone, 100.0, box, method=table_match_method
+                table_specific_zone, 100.0, box, method=table_match_method, zone_specificity="specific"
             )
 
         if table_area_zone is not None:
             return self._zone_result(
-                table_area_zone, table_area_pct, box, method="intersection"
+                table_area_zone, table_area_pct, box, method="intersection", zone_specificity="area"
             )
 
         return self._unknown_zone(reason="no_sufficient_intersection", box=box)
@@ -230,6 +230,7 @@ class ZoneManager:
         pct: float,
         box: list[int | float] | None = None,
         method: str = "intersection",
+        zone_specificity: str | None = None,
     ) -> dict[str, Any]:
         return {
             "zone_id": zone.get("zone_id"),
@@ -239,6 +240,7 @@ class ZoneManager:
             "box": box,
             "matched": True,
             "method": method,
+            "zone_specificity": zone_specificity,
         }
 
     def _unknown_zone(

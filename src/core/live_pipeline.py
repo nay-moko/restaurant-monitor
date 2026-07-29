@@ -124,6 +124,20 @@ class LivePipeline:
         self._table_was_served:      dict[str, bool] = {}  # zone_id -> served flag
         self._table_states:          dict[str, str]  = {}  # zone_id -> "free"|"occupied"|"dirty"
 
+        # -- Seated-id hysteresis (mirrors ZoneManager's own occupy/vacate
+        # timers, which were previously declared but never wired in) -------
+        self._table_presence_cycles: dict[tuple[str, str], int] = {}  # (zone_id, gid) -> consecutive present cycles
+        self._table_absence_cycles:  dict[tuple[str, str], int] = {}  # (zone_id, gid) -> consecutive absent cycles
+        self._table_seated_ids:      dict[str, set[str]]        = {}  # zone_id -> confirmed seated global_ids
+
+        # Occupy/vacate cycle counts depend on the ACTUAL per-camera cadence
+        # _run_kbs runs at (run_live.py hardcodes pose_stride=1, so that's the
+        # video's native fps, not config.process_fps) -- computed later via
+        # set_frame_rate() once the capture's real fps is known, not here.
+        self._occupy_cycles = 1
+        self._vacate_cycles = 1
+        self.SERVING_SUSTAINED_FRAMES = 6  # mirrors RoleEngine's W_SERVING_SUSTAINED bar (pfc > 6)
+
     # -----------------------------------------------------------------------
     # Public API
     # -----------------------------------------------------------------------
@@ -206,6 +220,7 @@ class LivePipeline:
             raw_zone_type = zone.get("zone_type", "unknown") if zone else "unknown"
             enriched_obj["zone_type_normalized"] = self.ZONE_TYPE_MAP.get(raw_zone_type, "unknown")
             enriched_obj["zone_name"] = zone.get("zone_name", "Unknown") if zone else "Unknown"
+            enriched_obj["zone_specificity"] = zone.get("zone_specificity") if zone else None
             enriched_obj["zone_point"] = kpts
             enriched_obj["active_state"] = self._active_states.get(track_id, "active")
             enriched_tracks.append(enriched_obj)
@@ -310,6 +325,19 @@ class LivePipeline:
         state so no per-camera filtering is needed here.
         """
         return dict(self._table_states)
+   
+    def set_frame_rate(self, fps: float) -> None:
+        """Recompute occupy/vacate hysteresis windows for this camera's actual
+        per-frame cadence. Must be called once after the capture's real fps
+        is known -- e.g. from run_live.py right after cv2.VideoCapture opens --
+        since _run_kbs runs every raw frame (pose_stride is hardcoded to 1),
+        not at config.pipeline.process_fps.
+        """
+        if not fps or fps <= 0:
+            return
+        self._occupy_cycles = max(1, round(self.zone_manager.TIME_TO_OCCUPY * fps))
+        self._vacate_cycles = max(1, round(self.zone_manager.TIME_TO_VACATE * fps))
+      
     # -----------------------------------------------------------------------
     # Private helpers
     # -----------------------------------------------------------------------
@@ -597,36 +625,83 @@ class LivePipeline:
             tid = obj["track_id"]
             obj["active_state"] = self._active_states.get(tid, "active")
 
-        # -- Update table customer counts -----------------------------------
-        zone_customer_counts: dict[str, int] = {}
+        # -- Update table seated_ids (id-set with occupy/vacate hysteresis) --
+        # Only zone_specificity == "specific" observations count -- a
+        # table_area-only match is zone-ambiguous and must not move any
+        # single table's occupancy.
+        raw_present: dict[str, set[str]] = {}
         for obj in tracked_objects:
             tid  = obj["track_id"]
             role = self._person_roles.get(tid, "unknown")
             if role != "customer":
                 continue
+            zone = obj.get("zone") or {}
+            if zone.get("zone_type") != "table" or obj.get("zone_specificity") != "specific":
+                continue
+            zone_id = zone.get("zone_id")
+            gid = self._global_ids.get(tid, f"local_{tid}")
+            if zone_id:
+                raw_present.setdefault(zone_id, set()).add(gid)
+
+        all_pair_zone_ids = (
+            set(raw_present)
+            | {zid for (zid, _gid) in self._table_presence_cycles}
+            | {zid for (zid, _gid) in self._table_absence_cycles}
+            | set(self._table_seated_ids)
+        )
+
+        for zone_id in all_pair_zone_ids:
+            present_gids = raw_present.get(zone_id, set())
+            seated = self._table_seated_ids.setdefault(zone_id, set())
+
+            # Confirm-to-occupy: consecutive presence must cross the threshold
+            for gid in present_gids:
+                key = (zone_id, gid)
+                self._table_presence_cycles[key] = self._table_presence_cycles.get(key, 0) + 1
+                self._table_absence_cycles.pop(key, None)
+                if gid not in seated and self._table_presence_cycles[key] >= self._occupy_cycles:
+                    seated.add(gid)
+
+            # Confirm-to-vacate: consecutive absence must cross the threshold
+            for gid in list(seated):
+                if gid in present_gids:
+                    continue
+                key = (zone_id, gid)
+                self._table_absence_cycles[key] = self._table_absence_cycles.get(key, 0) + 1
+                self._table_presence_cycles.pop(key, None)
+                if self._table_absence_cycles[key] >= self._vacate_cycles:
+                    seated.discard(gid)
+                    self._table_absence_cycles.pop(key, None)
+         
+        zone_customer_counts = {zid: len(gids) for zid, gids in self._table_seated_ids.items()}
+
+        # -- Check for serving events: "serve" (occupied) vs "clean" (dirty) -
+        # No dedicated cleaning label exists, so a sustained serving action on
+        # an empty, dirty table IS treated as the cleaning event. Both
+        # branches require zone_specificity == "specific" for the same reason
+        # as the occupancy count above.
+        for obj in tracked_objects:
+            tid     = obj["track_id"]
+            role    = self._person_roles.get(tid, "unknown")
+            action  = self._action_labels.get(tid, "unknown")
             zone    = obj.get("zone") or {}
             zone_id = zone.get("zone_id")
-            if zone_id:
-                zone_customer_counts[zone_id] = zone_customer_counts.get(zone_id, 0) + 1
+            pfc     = self._action_frame_counts.get(tid, 0)
 
-        # -- Check for serving events to set was_served flag ----------------
-        for obj in tracked_objects:
-            tid       = obj["track_id"]
-            role      = self._person_roles.get(tid, "unknown")
-            action    = self._action_labels.get(tid, "unknown")
-            zone      = obj.get("zone") or {}
-            zone_id   = zone.get("zone_id")
-            zone_type = obj.get("zone_type_normalized", "unknown")
-
-            if (
+            if not (
                 role == "worker"
                 and action == "serving"
-                and zone_type == "table"
+                and zone.get("zone_type") == "table"
+                and obj.get("zone_specificity") == "specific"
                 and zone_id
-                and zone_customer_counts.get(zone_id, 0) > 0
+                and pfc > self.SERVING_SUSTAINED_FRAMES
             ):
+                continue
+            if zone_customer_counts.get(zone_id, 0) > 0:
                 self._table_was_served[zone_id] = True
-
+            elif self._table_states.get(zone_id) == "dirty":
+                self._table_was_served[zone_id] = False
+       
         # -- TableKBS ---------------------------------------------------------
         all_zone_ids = (
             set(zone_customer_counts)
@@ -652,7 +727,8 @@ class LivePipeline:
             self._table_states[fact["zone_id"]] = fact["state"]
             if fact["state"] == "free":
                 self._table_was_served[fact["zone_id"]] = False
-
+  
+                
         # # -- WorkerKBS ------------------------------------------------------
         # self.worker_kbs = WorkerKBS()
         # self.worker_kbs.reset()
