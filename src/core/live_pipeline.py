@@ -122,6 +122,7 @@ class LivePipeline:
         # -- Table state ----------------------------------------------------
         self._table_customer_counts: dict[str, int]  = {}  # zone_id -> count
         self._table_was_served:      dict[str, bool] = {}  # zone_id -> served flag
+        self._table_states:          dict[str, str]  = {}  # zone_id -> "free"|"occupied"|"dirty"
 
     # -----------------------------------------------------------------------
     # Public API
@@ -301,6 +302,14 @@ class LivePipeline:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180, 105, 255), 2,
                 )
 
+    def get_tables_current_state(self, camera_id: str) -> dict[str, str]:
+        """Return {zone_id: state} for all tables tracked by TableKBS so far.
+
+        camera_id is accepted for API symmetry with run_live.py's draw call;
+        zone_ids are already unique across the pipeline's single-process
+        state so no per-camera filtering is needed here.
+        """
+        return dict(self._table_states)
     # -----------------------------------------------------------------------
     # Private helpers
     # -----------------------------------------------------------------------
@@ -618,23 +627,31 @@ class LivePipeline:
             ):
                 self._table_was_served[zone_id] = True
 
-        # # -- TableKBS -------------------------------------------------------
-        # all_zone_ids = (
-        #     set(zone_customer_counts)
-        #     | set(self._table_customer_counts)
-        #     | set(self._table_was_served)
-        # )
+        # -- TableKBS ---------------------------------------------------------
+        all_zone_ids = (
+            set(zone_customer_counts)
+            | set(self._table_customer_counts)
+            | set(self._table_was_served)
+        )
 
-        # self.table_kbs = TableKBS()
-        # self.table_kbs.reset()
-        # for zone_id in all_zone_ids:
-        #     self.table_kbs.declare(TableFact(
-        #         zone_id        = zone_id,
-        #         customer_count = zone_customer_counts.get(zone_id, 0),
-        #         was_served     = self._table_was_served.get(zone_id, False),
-        #     ))
-        # self.table_kbs.run()
-        # self._table_customer_counts = zone_customer_counts
+        self.table_kbs = TableKBS()
+        self.table_kbs.reset()
+        for zone_id in all_zone_ids:
+            self.table_kbs.declare(TableFact(
+                zone_id        = zone_id,
+                customer_count = zone_customer_counts.get(zone_id, 0),
+                was_served     = self._table_was_served.get(zone_id, False),
+            ))
+        self.table_kbs.run()
+        self._table_customer_counts = zone_customer_counts
+
+        # -- Read TableKBS results, clear was_served once a table goes free ---
+        for fact in self.table_kbs.facts.values():
+            if not isinstance(fact, TableFact):
+                continue
+            self._table_states[fact["zone_id"]] = fact["state"]
+            if fact["state"] == "free":
+                self._table_was_served[fact["zone_id"]] = False
 
         # # -- WorkerKBS ------------------------------------------------------
         # self.worker_kbs = WorkerKBS()
