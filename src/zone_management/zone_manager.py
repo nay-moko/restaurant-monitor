@@ -59,7 +59,17 @@ class ZoneManager:
         if not zones:
             return self._unknown_zone(reason="no_zones", box=box)
 
-        # -- Step 1: skeleton check --
+        # -- Step 1: hand/table check takes priority -- a person whose hands
+        # are on/near a table (e.g. sitting) must not be short-circuited into
+        # a walk zone just because their feet/legs geometrically overlap an
+        # adjacent aisle.
+        table_hit, table_hit_method = self._find_table_by_hands(zones, keypoints)
+        if table_hit is not None:
+            return self._zone_result(
+                table_hit, 100.0, box, method=table_hit_method
+            )
+
+        # -- Step 1b: skeleton check for walk zones --
         walk_zone_hit = self._check_lower_body_in_walk_zone(zones, keypoints)
         if walk_zone_hit is not None:
             return self._zone_result(

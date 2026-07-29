@@ -717,7 +717,7 @@ class RoleEngine(KnowledgeEngine):
             confidence = round(dominant / total, 3)
 
         active_state = "active"
-        if role == "worker" and obs["action"] == "sitting" and obs["zone_type"] == "staff":
+        if role == "worker" and obs["action"] == "sitting":
             active_state = "inactive"
 
         self.declare(RoleDecision(

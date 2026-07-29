@@ -12,8 +12,8 @@ import torch
 from src.ai_models.detector import PersonDetector
 from src.ai_models.tracker import RestaurantTracker
 from src.zone_management.zone_manager import ZoneManager
-from src.kbs.action_kbs import ActionKBS, PersonFact
-from src.kbs.worker_kbs import WorkerKBS, WorkerFact
+# from src.kbs.action_kbs import ActionKBS, PersonFact
+# from src.kbs.worker_kbs import WorkerKBS, WorkerFact
 from src.kbs.table_kbs import TableKBS, TableFact
 from src.kbs.reid_gallery import ReIDGallery, SessionGallery
 from src.kbs.role_engine import (
@@ -25,6 +25,7 @@ from src.core.classifiers import PoseLSTM
 class LivePipeline:
     ZONE_TYPE_MAP: dict[str, str] = {
         "table_area"           : "table",
+        "table"                 : "table",
         "service_path"         : "walk",
         "hallway"              : "walk",
         "corridor"             : "walk",
@@ -99,7 +100,7 @@ class LivePipeline:
         self.zone_manager = ZoneManager()
 
         # -- KBS engines (instantiated once, reset each frame) --------------
-        self.action_kbs   = ActionKBS()
+        # self.action_kbs   = ActionKBS()
         # self.worker_kbs   = WorkerKBS()
         # self.table_kbs    = TableKBS()
         self.reid_gallery = ReIDGallery()
@@ -172,6 +173,7 @@ class LivePipeline:
         enriched_tracks: list[dict[str, Any]] = []
 
         pose_points_by_track_id: dict[int, list[int]] = {}
+        keypoints_by_track_id = {}
         if detections and keypoints_list:
             for det, kpts in zip(detections, keypoints_list):
                 if kpts is None:
@@ -181,26 +183,29 @@ class LivePipeline:
                 if track_id is None:
                     continue
 
-                pose_points_by_track_id[track_id] = self._estimate_zone_point(det.get("box", [0, 0, 0, 0]), kpts)
+                keypoints_by_track_id[track_id] = kpts
 
         for obj in tracked_objects:
             track_id = obj.get("track_id")
             box = obj.get("box", [0, 0, 0, 0])
-            zone_point = pose_points_by_track_id.get(track_id)
+            kpts = keypoints_by_track_id.get(track_id) if keypoints_list else None
 
-            if zone_point is None:
-                zone_point = self._estimate_zone_point(box, None)
-
-            zone = self.zone_manager.get_point_zone(
+            zone = self.zone_manager.get_bbox_zone(
                 camera_id=camera_id,
-                point=zone_point,
+                box=box,
+                keypoints=kpts,
             )
+            if track_id in (1, 2, 6):  # adjust to tracks you know are sitting
+                hand_conf = None
+                if kpts is not None:
+                    hand_conf = [(int(i), round(float(kpts[i][2]), 3)) for i in (9, 10) if i < len(kpts)]
+                print(f"[DEBUG zone] tid={track_id} kpts_present={kpts is not None} hand_conf(idx,conf)={hand_conf} zone_type={zone.get('zone_type')} method={zone.get('method')} reason={zone.get('reason')}")
             enriched_obj = dict(obj)
             enriched_obj["zone"] = zone
             raw_zone_type = zone.get("zone_type", "unknown") if zone else "unknown"
             enriched_obj["zone_type_normalized"] = self.ZONE_TYPE_MAP.get(raw_zone_type, "unknown")
             enriched_obj["zone_name"] = zone.get("zone_name", "Unknown") if zone else "Unknown"
-            enriched_obj["zone_point"] = zone_point
+            enriched_obj["zone_point"] = kpts
             enriched_obj["active_state"] = self._active_states.get(track_id, "active")
             enriched_tracks.append(enriched_obj)
 
@@ -264,15 +269,22 @@ class LivePipeline:
             action    = self._action_labels.get(track_id, "...")
             role      = self._person_roles.get(track_id, "unknown")
             gid       = self._global_ids.get(track_id)
+            active_state = self._active_states.get(track_id, "active")
             color     = self.ROLE_COLORS.get(role, (255, 255, 255))
 
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            box_color = color
+            if role == "worker" and active_state == "inactive":
+                box_color = (128, 128, 128)  # grey out inactive workers
+
+            cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2)
 
             label = f"{action} | {role} | {zone_type}"
+            if role == "worker":
+                label += f" | {active_state}"
             cv2.putText(
                 frame, label,
                 (x1, max(35, y1 - 8)),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2,
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, box_color, 2,
             )
 
             cv2.putText(
@@ -430,7 +442,8 @@ class LivePipeline:
         with torch.no_grad():
             pred = self.action_model(x).argmax(1).item()
 
-        self._action_labels[track_id] = self.label_encoder.classes_[pred]
+        predicted_label = self.label_encoder.classes_[pred]
+        self._action_labels[track_id] = predicted_label
 
     def _run_kbs(self, tracked_objects: list[dict], person_crops: list[dict]) -> None:
         crop_by_id = {
