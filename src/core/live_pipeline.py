@@ -690,7 +690,7 @@ class LivePipeline:
 
             if not (
                 role == "worker"
-                and action == "serving"
+                and action == "standing"
                 and zone.get("zone_type") == "table"
                 and obj.get("zone_specificity") == "specific"
                 and zone_id
