@@ -1,1 +1,6 @@
-# الإحصائيات اللحظية والتاريخية (Daily/Weekly/Monthly)
+# مؤشرات الأداء
+from fastapi import APIRouter
+
+router = APIRouter()
+
+# TODO: Implement KPIs endpoints
