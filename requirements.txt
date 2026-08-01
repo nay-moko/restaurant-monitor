@@ -16,6 +16,11 @@
 #     tensorboard). torchreid does not declare either as a dependency,
 #     so `import torchreid` (used by src/kbs/reid_gallery.py) fails
 #     without them installed explicitly.
+#   - redis is imported directly by src/core/central_identity_store.py
+#     (Task 8's cross-process shared identity store) and by
+#     src/run_all_cameras.py, but was never declared here. Pinned to the
+#     version already resolved in the dev environment via `pip show redis`,
+#     same approach as every other entry in this file.
 #   - scikit-learn is not imported by name anywhere in src/, but
 #     models/label_encoder.pkl was pickled from a sklearn LabelEncoder;
 #     `pickle.load()` on it in LivePipeline.__init__
@@ -72,6 +77,7 @@ PySocks==1.7.1
 pytest==9.1.1
 python-dateutil==2.9.0.post0
 PyYAML==6.0.3
+redis==8.0.1
 requests==2.34.2
 schema==0.6.7
 scikit-learn==1.9.0

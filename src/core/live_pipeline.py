@@ -20,6 +20,8 @@ from src.kbs.role_engine import (
     RoleEngine, ObservationFact, ScoreAccumulator, MergeRequest, RoleDecision,
 )
 from src.core.classifiers import PoseLSTM
+from src.core.central_identity_store import CentralIdentityStore, CentralIdentityStoreError
+from src.core.pipeline_output import FrameOutput, TrackOutput
 
 
 class LivePipeline:
@@ -106,6 +108,22 @@ class LivePipeline:
         self.reid_gallery = ReIDGallery()
         self.session_gallery = SessionGallery(ttl_seconds=1800)  # 30 mins TTL
 
+        # -- Cross-process shared identity store (Task 8) --------------------
+        # Optional "redis" config section, backward-compatible with every
+        # existing config.json that predates this task (defaults below match
+        # central_state.py's/run_all_cameras.py's existing localhost:6379/db0
+        # convention). Constructing CentralIdentityStore never touches the
+        # network (see its docstring), so an unreachable Redis server cannot
+        # fail pipeline construction -- failures surface only at the point of
+        # use in _run_kbs(), where they're caught and fall back to
+        # self.session_gallery (tier 3).
+        redis_config = self.config.get("redis", {})
+        self.central_identity_store = CentralIdentityStore(
+            host=redis_config.get("host", "localhost"),
+            port=redis_config.get("port", 6379),
+            db=redis_config.get("db", 0),
+        )
+
         # KBS engines are re-instantiated each cycle in _run_kbs to avoid Experta lru_cache deadlock
 
         # -- Per-track state ------------------------------------------------
@@ -168,6 +186,12 @@ class LivePipeline:
             )
             self._run_kbs(tracked_objects, person_crops)
 
+        tables_current_state = self.get_tables_current_state(camera_id)
+        frame_output = self._build_frame_output(
+            camera_id, video_id, frame_index, time_seconds,
+            tracked_objects, tables_current_state,
+        )
+
         return {
             "camera_id":      camera_id,
             "video_id":       video_id,
@@ -176,7 +200,60 @@ class LivePipeline:
             "detections":     detections,
             "tracked_objects": tracked_objects,
             "person_crops":   person_crops,
+            "tables_current_state": tables_current_state,
+            "frame_output":   frame_output,
         }
+
+    def _build_track_output(self, obj: dict[str, Any]) -> TrackOutput:
+        """Map one post-enrichment tracked_objects[i] dict (see
+        enrich_tracks_with_zones()) plus this instance's per-track Re-ID/role
+        state into Task 4's TrackOutput contract. Mirrors the external
+        mapping already established and verified as correct by Task 6's
+        real-pipeline smoke test (docs/TASK6_REPORT.md §10), reused here
+        rather than re-derived from scratch, with one refinement: zone_id is
+        None when the zone was unmatched (zone.get("matched") is falsy) --
+        "unknown" there is ZoneManager's not-found sentinel, not a real zone
+        identity (see zone_manager.py's _unknown_zone()) -- consistent with
+        this repo's own already-documented design intent for this field
+        (docs/TASK4_REPORT.md) and with what EventEngine.ZONE_OCCUPANCY_CHANGE
+        (src/events/event_engine.py) already assumes: it only counts tracks
+        with a non-None zone_id as occupying a real zone.
+        """
+        tid = obj.get("track_id")
+        zone = obj.get("zone") or {}
+
+        return TrackOutput(
+            track_id=tid,
+            global_id=self._global_ids.get(tid, f"local_{tid}"),
+            bbox=[float(v) for v in obj.get("box", [0, 0, 0, 0])],
+            zone_id=zone.get("zone_id") if zone.get("matched") else None,
+            zone_type=obj.get("zone_type_normalized"),
+            role=self._person_roles.get(tid, "unknown"),
+            confidence=obj.get("conf"),
+            action=self._action_labels.get(tid),
+            zone_name=obj.get("zone_name"),
+        )
+
+    def _build_frame_output(
+        self,
+        camera_id: str,
+        video_id: str,
+        frame_index: int,
+        time_seconds: float,
+        tracked_objects: list[dict[str, Any]],
+        tables_current_state: dict[str, str],
+    ) -> FrameOutput:
+        """Build this frame's FrameOutput. time_seconds is passed straight
+        through, unchanged -- never re-derived from wall-clock time (Task 1's
+        fix, still honored here)."""
+        return FrameOutput(
+            camera_id=camera_id,
+            video_id=video_id,
+            frame_index=frame_index,
+            time_seconds=time_seconds,
+            tracks=[self._build_track_output(obj) for obj in tracked_objects],
+            table_states=tables_current_state,
+        )
 
     def enrich_tracks_with_zones(
         self,
@@ -521,7 +598,7 @@ class LivePipeline:
                 
             embedding = self.reid_gallery._extract(crop)
 
-            # 1. Check permanent Worker Gallery
+            # 1. Permanent Worker Gallery (in-process, unchanged) ------------
             matched_worker = self.reid_gallery._match(embedding)
             if matched_worker is not None:
                 self._person_roles[tid] = "worker"
@@ -529,18 +606,37 @@ class LivePipeline:
                 print(f"[ReID] track {tid} matched permanent worker → {matched_worker}")
                 continue
 
-            # 2. Check temporary Session Gallery
+            # 2. Central cross-process identity store (primary path for -----
+            #    anyone not matched locally as a permanent worker). Any
+            #    failure here (Redis unreachable, lock timeout, ...) is
+            #    caught and logged -- it must never propagate out of
+            #    _run_kbs() -- and falls through to tier 3 below.
+            central_gid = None
+            try:
+                central_gid = self.central_identity_store.resolve_identity(embedding)
+            except CentralIdentityStoreError as exc:
+                print(
+                    f"[ReID] central identity store unavailable ({exc}); "
+                    f"falling back to local session gallery for track {tid}"
+                )
+
+            if central_gid is not None:
+                self._global_ids[tid] = central_gid
+                print(f"[ReID] track {tid} resolved via central identity store → {central_gid}")
+                continue
+
+            # 3. Local SessionGallery -- only reached when Redis is ----------
+            #    unavailable (tier 2 above raised/returned nothing).
             matched_session = self.session_gallery.match(embedding)
             if matched_session is not None:
                 self._global_ids[tid] = matched_session
                 self.session_gallery.update_seen(matched_session, embedding)
-                print(f"[ReID] track {tid} matched active session → {matched_session}")
+                print(f"[ReID] track {tid} matched active session (fallback) → {matched_session}")
                 continue
 
-            # 3. New person: register in Session Gallery
             new_session = self.session_gallery.register(embedding)
             self._global_ids[tid] = new_session
-            print(f"[ReID] track {tid} registered as new session → {new_session}")
+            print(f"[ReID] track {tid} registered as new session (fallback) → {new_session}")
 
         # -- RoleEngine: classify all persons via point-based evidence ------
         engine = RoleEngine()
@@ -598,24 +694,36 @@ class LivePipeline:
             )
 
             # Re-ID Promotion: register newly confirmed workers in permanent gallery
+            # (a session_-prefixed id came from tier 3's local fallback, a
+            # central_-prefixed one from tier 2's shared store -- either can
+            # be promoted).
             gid = self._global_ids.get(tid)
-            if role == "worker" and gid and gid.startswith("session_"):
+            if role == "worker" and gid and (gid.startswith("session_") or gid.startswith("central_")):
                 crop = crop_by_id.get(tid)
                 if crop is not None:
                     embedding = self.reid_gallery._extract(crop)
                     new_worker_gid = self.reid_gallery._register(embedding)
-                    
+
                     # Rename in our track mappings
                     self._global_ids[tid] = new_worker_gid
-                    
+
                     # Rename in the accumulators dict so RoleEngine continues next cycle
                     if gid in self._role_accumulators:
                         acc = self._role_accumulators.pop(gid)
                         acc["global_id"] = new_worker_gid
                         self._role_accumulators[new_worker_gid] = acc
-                        
-                    # Remove from session gallery
-                    self.session_gallery.remove(gid)
+
+                    # Remove from whichever gallery/store issued the old id
+                    if gid.startswith("session_"):
+                        self.session_gallery.remove(gid)
+                    else:
+                        try:
+                            self.central_identity_store.remove(gid)
+                        except CentralIdentityStoreError as exc:
+                            print(
+                                f"[ReID][WARNING] failed to remove {gid} from central "
+                                f"identity store during promotion: {exc}"
+                            )
                     print(f"[ReID] Promoted {gid} to permanent worker → {new_worker_gid}")
 
         # Persist accumulators for next cycle

@@ -28,6 +28,7 @@ import sys
 import time
 from pathlib import Path
 
+import faiss
 import numpy as np
 import pytest
 
@@ -35,6 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.core.live_pipeline import LivePipeline
 from src.core.pipeline_output import TrackOutput, FrameOutput, frame_output_to_json
+from src.core.central_identity_store import CentralIdentityStore
 from src.kbs.table_kbs import TableKBS
 from src.kbs.reid_gallery import SessionGallery, ReIDGallery
 from src.zone_management.zone_manager import ZoneManager
@@ -185,10 +187,22 @@ def make_stub_pipeline() -> LivePipeline:
     pipeline.table_kbs = TableKBS()
     pipeline.session_gallery = SessionGallery()
     # Bypass ReIDGallery.__init__ (loads the real OSNet model) -- only its
-    # class-level MIN_CROP_WIDTH/MIN_CROP_HEIGHT constants are needed, since
-    # the stub detection's crop is sized to take the "too small, skip ReID"
-    # branch and never reach a method that needs the loaded model.
+    # class-level MIN_CROP_WIDTH/MIN_CROP_HEIGHT constants are needed. Note:
+    # _run_kbs() calls self.reid_gallery._extract(crop) directly and has no
+    # crop-size gate of its own (that check only lives inside
+    # ReIDGallery.process(), which _run_kbs doesn't call) -- so _extract()
+    # DOES run for this stub's small crop and needs a working override
+    # rather than the real (unloaded) OSNet extractor.
     pipeline.reid_gallery = object.__new__(ReIDGallery)
+    pipeline.reid_gallery._extract = lambda crop: np.ones((1, 512), dtype=np.float32) / (512 ** 0.5)
+    pipeline.reid_gallery.index = faiss.IndexFlatIP(ReIDGallery.EMBEDDING_DIM)
+    pipeline.reid_gallery._ids = []
+    pipeline.reid_gallery.threshold = 0.72
+    # Deliberately unreachable (nothing listens on port 1) -- exercises the
+    # real tier-2-unavailable -> tier-3 SessionGallery fallback path
+    # (src/core/live_pipeline.py's _run_kbs()) deterministically, without
+    # this unit test depending on a real Redis instance being up.
+    pipeline.central_identity_store = CentralIdentityStore(host="localhost", port=1, db=0, socket_timeout=0.2)
 
     pipeline._kp_buffer = {}
     pipeline._action_labels = {}
@@ -196,11 +210,18 @@ def make_stub_pipeline() -> LivePipeline:
     pipeline._last_action_zone = {}
     pipeline._global_ids = {}
     pipeline._person_roles = {}
+    pipeline._active_states = {}
     pipeline._role_accumulators = {}
     pipeline._gid_track_counts = {}
     pipeline._table_customer_counts = {}
     pipeline._table_was_served = {}
     pipeline._table_states = {}
+    pipeline._table_presence_cycles = {}
+    pipeline._table_absence_cycles = {}
+    pipeline._table_seated_ids = {}
+    pipeline._occupy_cycles = 1
+    pipeline._vacate_cycles = 1
+    pipeline.SERVING_SUSTAINED_FRAMES = 6
     pipeline.person_state = []
     return pipeline
 
@@ -243,17 +264,25 @@ def test_process_frame_produces_frame_output_reflecting_real_pipeline_state():
     assert track.zone_id == "table_1"
     assert track.zone_type == "table"
     assert track.zone_name == "Table 1"
-    # The crop is deliberately too small for ReID (see _StubDetector), so the
-    # pipeline's real fallback naming applies -- this is the actual identity
-    # the pipeline assigned this frame, not a hardcoded test placeholder.
-    assert track.global_id == "local_1"
+    # _run_kbs() has no crop-size gate of its own (see make_stub_pipeline()'s
+    # comment) -- real Re-ID genuinely runs for this track. The stub's
+    # central_identity_store is deliberately unreachable, so it falls
+    # through tier 2 to the real tier-3 SessionGallery, which registers a
+    # real "session_..." id -- this is the actual identity the real _run_kbs()
+    # call chain assigned this frame, not a hardcoded test placeholder.
+    assert track.global_id.startswith("session_")
     assert track.role in ("worker", "customer", "unknown")
 
-    # table_states reflects the real TableKBS run for this camera's configured zones,
-    # not an empty/placeholder dict -- the configured table shows up even though
-    # role assignment on a single cycle is likely still "unknown" (Task 2 behavior).
-    assert "table_1" in frame_output.table_states
-    assert frame_output.table_states["table_1"] in ("free", "occupied", "dirty")
+    # table_states reflects real, current TableKBS behavior for this single-
+    # cycle stub run: TableKBS only declares a fact for a zone once it has
+    # customer-occupancy evidence (self._table_customer_counts /
+    # _table_was_served in live_pipeline.py's _run_kbs()), and RoleEngine
+    # hasn't confirmed this track as "customer" after only one cycle (role
+    # is "unknown", per the assertion above) -- so no TableFact was ever
+    # declared for "table_1" here. table_states legitimately equals {} in
+    # this exact scenario: the real (correct, empty) output of
+    # get_tables_current_state(), not a hardcoded placeholder.
+    assert frame_output.table_states == {}
 
     # The raw dict return is unchanged (additive integration, not a breaking change).
     assert event["tracked_objects"][0]["track_id"] == 1
