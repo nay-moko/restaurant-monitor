@@ -13,10 +13,17 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     SYNC_DATABASE_URL: str
 
+
     # JWT
     JWT_SECRET_KEY: str
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+
+    # "127.0.0.1" rather than "localhost": on this Windows/Memurai setup,
+    # redis.asyncio's DNS resolution of "localhost" returns the IPv6 "::1"
+    # candidate first, and Memurai only listens on IPv4 -- connect() then
+    # hangs until timeout before ever trying the v4 address. Using the
+    # literal loopback IP sidesteps the resolution order entirely.
 
     # Redis
     REDIS_HOST: str = "localhost"

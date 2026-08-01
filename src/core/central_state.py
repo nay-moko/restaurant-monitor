@@ -1,3 +1,9 @@
+# NOTE (Task 8): superseded by src/core/central_identity_store.py's
+# CentralIdentityStore, which is the class actually wired into
+# LivePipeline for cross-process identity sync. This file is a prior,
+# unguarded teammate attempt -- it is not imported anywhere in the
+# codebase and is kept only for reference, not currently used.
+
 import redis
 import json
 import numpy as np
