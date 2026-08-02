@@ -5,6 +5,49 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from uuid import UUID
 
 
+# خريطة تطبيع أنواع المناطق للتوافق مع AI Pipeline
+# هذه الخريطة تحول الأنواع المستخدمة في الواجهة الأمامية إلى القيم الموحدة المتوقعة من الـ AI
+ZONE_TYPE_NORMALIZATION_MAP = {
+    # API Frontend → AI Pipeline Normalized Value
+    "customer_zone": "table",       # مناطق العملاء/الطاولات
+    "staff_zone": "work",           # مناطق الموظفين
+    "walkway": "walk",              # الممرات
+    "kitchen_area": "work",         # المطبخ
+    "entry_exit": "walk",           # المداخل والمخارج
+    
+    # القيم القديمة للتوافق (من zones_config.json القديم)
+    "table_area": "table",
+    "staff_area": "work",
+    "service_path": "walk",
+    "hallway": "walk",
+    "corridor": "walk",
+    "open_area": "walk",
+    "mixed_area": "walk",
+    "entrance": "walk",
+    "buffet": "work",
+    "cashier": "work",
+    
+    # القيم الموحدة نفسها (لا تغيير)
+    "table": "table",
+    "walk": "walk",
+    "work": "work",
+    "unknown": "unknown",
+}
+
+
+def normalize_zone_type(zone_type: str) -> str:
+    """
+    تطبيع نوع المنطقة للتوافق مع AI Pipeline
+    
+    Args:
+        zone_type: نوع المنطقة كما يدخله الأدمن
+    
+    Returns:
+        القيمة الموحدة المتوقعة من الـ AI pipeline
+    """
+    return ZONE_TYPE_NORMALIZATION_MAP.get(zone_type, zone_type)
+
+
 class PolygonCoordinates(BaseModel):
     """نموذج مرن لتمثيل إحداثيات المضلع من قاعدة البيانات"""
     points: List[Union[List[Union[int, float]], dict[str, Union[int, float]]]] = Field(
@@ -71,7 +114,12 @@ class ZoneBase(BaseModel):
     """النموذج الأساسي للمناطق"""
     camera_id: str = Field(..., description="معرف الكاميرا المرتبطة بالمنطقة")
     name: str = Field(..., min_length=1, max_length=100, description="اسم المنطقة")
-    zone_type: str = Field(..., min_length=1, max_length=50, description="نوع المنطقة (customer_zone, staff_zone, walkway, table_area, service_path, entrance, corridor, mixed_area, table, etc.)")
+    zone_type: str = Field(
+        ..., 
+        min_length=1, 
+        max_length=50, 
+        description="نوع المنطقة (سيتم تطبيعها تلقائياً: customer_zone→table, staff_zone→work, walkway→walk, kitchen_area→work, entry_exit→walk)"
+    )
     polygon_coordinates: PolygonCoordinates = Field(..., description="إحداثيات المضلع")
 
 
@@ -80,6 +128,13 @@ class ZoneCreate(ZoneBase):
     parent_zone_id: Optional[str] = Field(None, description="معرف المنطقة الأب (اختياري)")
     excludes_tables: bool = Field(False, description="هل تستثني المنطقة الطاولات؟")
     auto_generated: bool = Field(False, description="هل تم إنشاء المنطقة تلقائياً؟")
+
+    @model_validator(mode='after')
+    def normalize_zone_type_field(self):
+        """تطبيع نوع المنطقة للتوافق مع AI Pipeline"""
+        if self.zone_type:
+            self.zone_type = normalize_zone_type(self.zone_type)
+        return self
 
 
 class ZoneUpdate(BaseModel):
@@ -90,6 +145,13 @@ class ZoneUpdate(BaseModel):
     parent_zone_id: Optional[str] = Field(None, description="معرف المنطقة الأب")
     excludes_tables: Optional[bool] = Field(None, description="هل تستثني المنطقة الطاولات؟")
     auto_generated: Optional[bool] = Field(None, description="هل تم إنشاء المنطقة تلقائياً؟")
+
+    @model_validator(mode='after')
+    def normalize_zone_type_field(self):
+        """تطبيع نوع المنطقة للتوافق مع AI Pipeline"""
+        if self.zone_type:
+            self.zone_type = normalize_zone_type(self.zone_type)
+        return self
 
 
 class ZoneResponse(BaseModel):

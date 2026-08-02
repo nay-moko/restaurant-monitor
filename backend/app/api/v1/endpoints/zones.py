@@ -21,7 +21,9 @@ from app.schemas.zone import (
     ZoneUpdate,
     ZoneResponse,
     ZoneListResponse,
-    PolygonCoordinates
+    PolygonCoordinates,
+    normalize_zone_type,
+    ZONE_TYPE_NORMALIZATION_MAP
 )
 
 router = APIRouter()
@@ -124,7 +126,7 @@ async def get_zones_by_camera(
     **Required fields:**
     - `camera_id`: Target camera identifier
     - `name`: Display name for the zone
-    - `zone_type`: Category classification (`customer_zone`, `staff_zone`, `walkway`, `table_area`, etc.)
+    - `zone_type`: Category classification (سيتم تطبيعها تلقائياً: customer_zone→table, staff_zone→work, walkway→walk, kitchen_area→work, entry_exit→walk)
     - `polygon_coordinates`: Geometric coordinate dictionary defining the polygon boundary
     
     **Optional fields:**
@@ -170,13 +172,14 @@ async def create_zone(
             )
     
     # 3. Construct and save the new zone instance
+    # ملاحظة: zone_type تم تطبيعها تلقائياً في Schema للتوافق مع AI Pipeline
     zone_id = str(uuid4())
     new_zone = Zone(
         id=zone_id,
         camera_id=zone_data.camera_id,
         parent_zone_id=zone_data.parent_zone_id,
         name=zone_data.name,
-        zone_type=zone_data.zone_type,
+        zone_type=zone_data.zone_type,  # القيمة الموحدة (table/work/walk)
         polygon_coordinates=zone_data.polygon_coordinates.to_dict(),
         auto_generated=zone_data.auto_generated,
         excludes_tables=zone_data.excludes_tables
@@ -226,6 +229,7 @@ async def update_zone(
         )
     
     # 2. Extract set attributes for partial update
+    # ملاحظة: zone_type تم تطبيعها تلقائياً في Schema للتوافق مع AI Pipeline
     update_data = zone_data.model_dump(exclude_unset=True)
     
     # Properly convert Pydantic coordinate object to dictionary
