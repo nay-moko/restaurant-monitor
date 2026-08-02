@@ -1,4 +1,4 @@
-# إدارة المضلعات (Zones)، الصور اللحظية (Snapshots)
+# Zone Management (Zones), Camera Snapshots
 from pathlib import Path
 from fastapi.responses import FileResponse
 from typing import List
@@ -29,7 +29,7 @@ from app.schemas.zone import (
 router = APIRouter()
 
 
-# 📌 البحث الديناميكي عن المجلد الرئيسي الذي يحتوي على مجلد data
+# 📌 Dynamic search for the main directory containing the data folder
 CURRENT_FILE = Path(__file__).resolve()
 PROJECT_ROOT = None
 
@@ -38,11 +38,11 @@ for parent in CURRENT_FILE.parents:
         PROJECT_ROOT = parent
         break
 
-# إذا لم يجده، نحدد المسار الافتراضي للـ data
+# If not found, set the default path for data
 if PROJECT_ROOT:
     REF_FRAMES_DIR = PROJECT_ROOT / "data" / "debug" / "zones" / "reference_frames"
 else:
-    # مسار احتياطي مباشر
+    # Fallback direct path
     REF_FRAMES_DIR = Path("C:/Users/hp/Desktop/restaurant-monitor/data/debug/zones/reference_frames")
 
 
@@ -55,11 +55,11 @@ async def get_camera_snapshot(
     camera_id: str,
     current_admin: Admin = Depends(get_current_admin)
 ):
-    # 1. البحث عن الصورة المرجعية لخلفية الرسم
+    # 1. Search for the reference image for drawing background
     ref_image_jpg = REF_FRAMES_DIR / f"{camera_id}_reference.jpg"
     ref_image_png = REF_FRAMES_DIR / f"{camera_id}_reference.png"
 
-    # طباعة المسار في الـ Terminal للتأكد من المكان الذي يبحث فيه
+    # Print the path in Terminal to verify the search location
     print(f"📸 Checking for snapshot at: {ref_image_jpg}")
 
     if ref_image_jpg.exists():
@@ -67,7 +67,7 @@ async def get_camera_snapshot(
     elif ref_image_png.exists():
         return FileResponse(path=ref_image_png, media_type="image/png")
 
-    # 2. في حال عدم وجود صورة لهذا الاسم تحديدا
+    # 2. If no image exists for this specific name
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
         detail=f"Image not found for '{camera_id}'. Looked at: {ref_image_jpg}"
@@ -126,7 +126,7 @@ async def get_zones_by_camera(
     **Required fields:**
     - `camera_id`: Target camera identifier
     - `name`: Display name for the zone
-    - `zone_type`: Category classification (سيتم تطبيعها تلقائياً: customer_zone→table, staff_zone→work, walkway→walk, kitchen_area→work, entry_exit→walk)
+    - `zone_type`: Category classification (automatically normalized: customer_zone→table, staff_zone→work, walkway→walk, kitchen_area→work, entry_exit→walk)
     - `polygon_coordinates`: Geometric coordinate dictionary defining the polygon boundary
     
     **Optional fields:**
@@ -172,14 +172,14 @@ async def create_zone(
             )
     
     # 3. Construct and save the new zone instance
-    # ملاحظة: zone_type تم تطبيعها تلقائياً في Schema للتوافق مع AI Pipeline
+    # Note: zone_type is automatically normalized in Schema for AI Pipeline compatibility
     zone_id = str(uuid4())
     new_zone = Zone(
         id=zone_id,
         camera_id=zone_data.camera_id,
         parent_zone_id=zone_data.parent_zone_id,
         name=zone_data.name,
-        zone_type=zone_data.zone_type,  # القيمة الموحدة (table/work/walk)
+        zone_type=zone_data.zone_type,  # Normalized value (table/work/walk)
         polygon_coordinates=zone_data.polygon_coordinates.to_dict(),
         auto_generated=zone_data.auto_generated,
         excludes_tables=zone_data.excludes_tables
@@ -229,7 +229,7 @@ async def update_zone(
         )
     
     # 2. Extract set attributes for partial update
-    # ملاحظة: zone_type تم تطبيعها تلقائياً في Schema للتوافق مع AI Pipeline
+    # Note: zone_type is automatically normalized in Schema for AI Pipeline compatibility
     update_data = zone_data.model_dump(exclude_unset=True)
     
     # Properly convert Pydantic coordinate object to dictionary

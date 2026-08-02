@@ -1,0 +1,601 @@
+# Restaurant Monitoring System API Documentation
+
+## Overview
+
+This document provides comprehensive documentation for the Restaurant Floor Monitoring System API, built with FastAPI, Async SQLAlchemy, and PostgreSQL.
+
+### Technology Stack
+- **Framework**: FastAPI (Async/Await)
+- **Database**: PostgreSQL with Async SQLAlchemy v2
+- **Validation**: Pydantic v2
+- **Authentication**: JWT with Redis for token revocation
+- **ORM**: SQLAlchemy 2.0 with async support
+
+---
+
+## Base URL
+
+```
+http://localhost:8000/api/v1
+```
+
+---
+
+## Authentication
+
+All endpoints require authentication using JWT Bearer tokens.
+
+### Authentication Flow
+
+1. **Login**: POST `/api/v1/auth/login`
+   ```json
+   {
+     "email": "admin@restaurant.com",
+     "password": "admin123"
+   }
+   ```
+   **Response**: `{"access_token": "jwt_token_here"}`
+
+2. **Use Token**: Include the token in the Authorization header:
+   ```
+   Authorization: Bearer jwt_token_here
+   ```
+
+### Authentication Endpoints
+
+#### POST `/api/v1/auth/login`
+Authenticate and receive access token.
+
+**Request Body:**
+```json
+{
+  "email": "string",
+  "password": "string"
+}
+```
+
+**Response:**
+```json
+{
+  "access_token": "string"
+}
+```
+
+#### GET `/api/v1/auth/me`
+Get current admin information.
+
+**Response:**
+```json
+{
+  "id": "uuid",
+  "email": "string"
+}
+```
+
+#### POST `/api/v1/auth/password/request-otp`
+Request OTP for password reset.
+
+**Request Body:**
+```json
+{
+  "email": "string"
+}
+```
+
+#### POST `/api/v1/auth/password/reset`
+Reset password using OTP.
+
+**Request Body:**
+```json
+{
+  "email": "string",
+  "otp": "string",
+  "new_password": "string"
+}
+```
+
+#### POST `/api/v1/auth/logout`
+Logout and revoke current token.
+
+---
+
+## Zones Management
+
+### Overview
+The zones management module provides endpoints for managing regions of interest (ROIs) for camera monitoring. All zone types are automatically normalized to ensure compatibility with the AI pipeline.
+
+### Zone Type Normalization
+
+The API automatically normalizes zone types to match AI pipeline expectations:
+
+| Input Type | Normalized Type | Description |
+|------------|-----------------|-------------|
+| `customer_zone` | `table` | Customer table areas |
+| `staff_zone` | `work` | Staff working areas |
+| `walkway` | `walk` | Walking paths |
+| `kitchen_area` | `work` | Kitchen areas |
+| `entry_exit` | `walk` | Entrance/exit areas |
+| `table_area` | `table` | Legacy table areas |
+| `staff_area` | `work` | Legacy staff areas |
+| `service_path` | `walk` | Legacy service paths |
+| `hallway` | `walk` | Legacy hallways |
+| `corridor` | `walk` | Legacy corridors |
+| `entrance` | `walk` | Legacy entrances |
+| `buffet` | `work` | Legacy buffet areas |
+| `cashier` | `work` | Legacy cashier areas |
+
+### Zone Endpoints
+
+#### GET `/api/v1/zones/cameras/{camera_id}/snapshot`
+Get camera reference image for zone mapping.
+
+**Parameters:**
+- `camera_id` (path): Camera identifier
+
+**Response:** Image file (JPEG/PNG)
+
+**Error Responses:**
+- `404`: Image not found for specified camera
+
+#### GET `/api/v1/zones/cameras/{camera_id}`
+Retrieve all zones for a specific camera.
+
+**Parameters:**
+- `camera_id` (path): Camera identifier
+
+**Response:**
+```json
+[
+  {
+    "id": "uuid",
+    "camera_id": "string",
+    "parent_zone_id": "uuid|null",
+    "name": "string",
+    "zone_type": "string",
+    "polygon_coordinates": {
+      "points": [[x, y], ...],
+      "image_size": {"width": int, "height": int}
+    },
+    "auto_generated": false,
+    "excludes_tables": false,
+    "created_at": "datetime",
+    "updated_at": "datetime"
+  }
+]
+```
+
+**Error Responses:**
+- `404`: Camera not found
+
+#### POST `/api/v1/zones/`
+Create a new zone.
+
+**Request Body:**
+```json
+{
+  "camera_id": "string",
+  "name": "string",
+  "zone_type": "string",
+  "polygon_coordinates": {
+    "points": [[x, y], ...],
+    "image_size": {"width": int, "height": int}
+  },
+  "parent_zone_id": "uuid|null",
+  "excludes_tables": false,
+  "auto_generated": false
+}
+```
+
+**Response:** Zone object (201 Created)
+
+**Error Responses:**
+- `400`: Invalid request payload
+- `404`: Camera or parent zone not found
+
+#### PUT `/api/v1/zones/{zone_id}`
+Update an existing zone.
+
+**Parameters:**
+- `zone_id` (path): Zone identifier
+
+**Request Body:**
+```json
+{
+  "name": "string",
+  "zone_type": "string",
+  "polygon_coordinates": {
+    "points": [[x, y], ...],
+    "image_size": {"width": int, "height": int}
+  },
+  "parent_zone_id": "uuid|null",
+  "excludes_tables": false,
+  "auto_generated": false
+}
+```
+
+**Response:** Updated zone object
+
+**Error Responses:**
+- `400`: Invalid payload format
+- `404`: Zone or parent zone not found
+
+#### DELETE `/api/v1/zones/{zone_id}`
+Delete a zone.
+
+**Parameters:**
+- `zone_id` (path): Zone identifier
+
+**Response:** 204 No Content
+
+**Error Responses:**
+- `404`: Zone not found
+
+---
+
+## Alerts Management
+
+### Overview
+The alerts management module provides endpoints for monitoring and resolving system alerts generated by the AI pipeline.
+
+### Alert Endpoints
+
+#### GET `/api/v1/alerts/`
+Retrieve alerts with optional status filtering.
+
+**Query Parameters:**
+- `status` (optional): Filter by alert status (`ACTIVE`, `RESOLVED`)
+
+**Response:**
+```json
+{
+  "alerts": [
+    {
+      "id": 1,
+      "alert_type": "string",
+      "entity_id": "string|null",
+      "camera_id": "string|null",
+      "zone_id": "string|null",
+      "message": "string",
+      "status": "ACTIVE|RESOLVED",
+      "created_at": "datetime",
+      "resolved_at": "datetime|null"
+    }
+  ]
+}
+```
+
+**Default Behavior:** Returns active alerts if no status is specified.
+
+#### POST `/api/v1/alerts/{alert_id}/resolve`
+Mark an alert as resolved.
+
+**Parameters:**
+- `alert_id` (path): Alert identifier
+
+**Response:**
+```json
+{
+  "id": 1,
+  "status": "RESOLVED",
+  "resolved_at": "datetime"
+}
+```
+
+**Error Responses:**
+- `404`: Alert not found
+- `400`: Alert already resolved
+
+---
+
+## Live Status Monitoring
+
+### Overview
+The live status module provides real-time monitoring of tables, workers, and zone occupancy using Redis caching.
+
+### Live Status Endpoints
+
+#### GET `/api/v1/live-status/tables/status`
+Get real-time status of all tables from Redis.
+
+**Response:**
+```json
+{
+  "tables": [
+    {
+      "zone_id": "string",
+      "camera_id": "string",
+      "status": "string"
+    }
+  ]
+}
+```
+
+#### GET `/api/v1/live-status/workers/status`
+Get real-time status of all workers from Redis.
+
+**Response:**
+```json
+{
+  "workers": [
+    {
+      "entity_id": "string",
+      "camera_id": "string|null",
+      "zone_id": "string|null",
+      "status": "string"
+    }
+  ]
+}
+```
+
+#### GET `/api/v1/live-status/zones-occupancy`
+Get real-time occupancy count for all zones from Redis.
+
+**Response:**
+```json
+{
+  "zones": [
+    {
+      "camera_id": "string",
+      "zone_id": "string",
+      "zone_name": "string",
+      "count": 0
+    }
+  ]
+}
+```
+
+---
+
+## System Settings Management
+
+### Overview
+The system settings module allows administrators to configure time-based thresholds for monitoring, particularly the worker idle limit.
+
+### Settings Validation
+
+- **Minimum Value**: 10 seconds
+- **Maximum Value**: 3600 seconds (60 minutes)
+- **Recommended Values**: 30, 60, 90, 120, 180, 300, 600 seconds
+
+### Settings Endpoints
+
+#### GET `/api/v1/settings/`
+Get current system settings.
+
+**Response:**
+```json
+{
+  "id": 1,
+  "worker_idle_limit": 60,
+  "updated_at": "datetime"
+}
+```
+
+**Error Responses:**
+- `404`: Settings not found (auto-created)
+
+#### GET `/api/v1/settings/detail`
+Get detailed system settings with formatted time values.
+
+**Response:**
+```json
+{
+  "id": 1,
+  "worker_idle_limit": 60,
+  "updated_at": "datetime",
+  "worker_idle_limit_minutes": 1.0,
+  "worker_idle_limit_formatted": "1 دقيقة"
+}
+```
+
+**Error Responses:**
+- `404`: Settings not found (auto-created)
+
+#### PUT `/api/v1/settings/`
+Update system settings.
+
+**Request Body:**
+```json
+{
+  "worker_idle_limit": 120
+}
+```
+
+**Response:** Updated settings object
+
+**Error Responses:**
+- `400`: Invalid data (value out of range)
+- `404`: Settings not found (auto-created)
+
+#### POST `/api/v1/settings/reset`
+Reset settings to default values.
+
+**Response:** Reset settings object (idle limit = 60 seconds)
+
+**Error Responses:**
+- `404`: Settings not found (auto-created)
+
+---
+
+## Data Models
+
+### Zone Model
+
+**Table:** `zones`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | String (100) | Primary key, UUID |
+| `camera_id` | String (50) | Foreign key to cameras |
+| `parent_zone_id` | String (100) | Foreign key to zones (nullable) |
+| `name` | String (100) | Zone display name |
+| `zone_type` | String (50) | Normalized zone type |
+| `polygon_coordinates` | JSONB | Polygon coordinates and metadata |
+| `auto_generated` | Boolean | AI-generated flag |
+| `excludes_tables` | Boolean | Table exclusion flag |
+| `created_at` | DateTime | Creation timestamp |
+| `updated_at` | DateTime | Last update timestamp |
+
+### SystemSetting Model
+
+**Table:** `system_settings`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | Integer | Primary key, auto-increment |
+| `worker_idle_limit` | Integer | Idle time limit in seconds (default: 60) |
+| `updated_at` | DateTime | Last update timestamp |
+
+---
+
+## Error Handling
+
+All endpoints follow standard HTTP status codes:
+
+- `200 OK`: Successful GET/PUT/DELETE
+- `201 Created`: Successful POST
+- `400 Bad Request`: Invalid input data
+- `401 Unauthorized`: Invalid or missing authentication
+- `404 Not Found`: Resource not found
+- `500 Internal Server Error`: Server error
+
+**Error Response Format:**
+```json
+{
+  "detail": "Error message here"
+}
+```
+
+---
+
+## Rate Limiting
+
+Currently, no rate limiting is implemented. Consider adding rate limiting for production deployment.
+
+---
+
+## CORS Configuration
+
+The API allows all origins by default for development:
+
+```python
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+```
+
+**⚠️ Important:** Restrict CORS origins in production environments.
+
+---
+
+## Database Schema
+
+### Migration History
+
+The current database schema was created using Alembic migration:
+
+- **Migration ID**: `15ed379f4248`
+- **Description**: Initial schema setup
+- **Tables Created**: 9 tables (admins, cameras, zones, system_settings, customer_sessions, worker_states, table_states, events_log, alerts)
+
+### Key Relationships
+
+- `cameras` → `zones` (One-to-Many, CASCADE delete)
+- `zones` → `zones` (Self-referencing for nested zones)
+- `zones` → `events_log` (Foreign key for zone tracking)
+- `zones` → `alerts` (Foreign key for zone alerts)
+
+---
+
+## Security Considerations
+
+### Authentication
+- JWT tokens with configurable expiration (default: 30 minutes)
+- Token revocation using Redis
+- Secure password hashing using pwdlib
+
+### Authorization
+- All endpoints protected with `get_current_admin` dependency
+- Role-based access control can be extended
+
+### Data Validation
+- Pydantic v2 schemas for input validation
+- SQL injection prevention through SQLAlchemy ORM
+- Zone type normalization prevents AI pipeline conflicts
+
+---
+
+## Development
+
+### Running the Server
+
+```bash
+cd backend
+python -m uvicorn app.main:app --reload
+```
+
+### Running Database Migrations
+
+```bash
+cd backend
+alembic upgrade head
+```
+
+### Running Database Seeds
+
+```bash
+cd backend
+python -m app.seed.seed_cameras
+python -m app.seed.seed_zones
+```
+
+---
+
+## API Testing
+
+### Swagger UI
+Interactive API documentation available at:
+```
+http://localhost:8000/docs
+```
+
+### OpenAPI Schema
+OpenAPI JSON schema available at:
+```
+http://localhost:8000/openapi.json
+```
+
+---
+
+## Future Enhancements
+
+### Planned Features
+- [ ] Cameras management endpoints
+- [ ] KPIs endpoints
+- [ ] Vision ingestion endpoints
+- [ ] Real-time WebSocket updates
+- [ ] File upload handling for zone images
+- [ ] Bulk zone operations
+- [ ] Export/import functionality
+
+### Performance Optimizations
+- [ ] Database query optimization
+- [ ] Response caching
+- [ ] Async file operations
+- [ ] Connection pooling tuning
+
+---
+
+## Support
+
+For issues or questions, please refer to the project repository or contact the development team.
+
+---
+
+**Document Version:** 1.0  
+**Last Updated:** 2026-08-02  
+**API Version:** v1.0.0
