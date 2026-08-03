@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-# 1. استيراد الراوتات الموحدة من v1
+# 1. Import unified routes from v1
 from app.api.v1.router import api_router
 from app.websockets.router import router as websocket_router
 
@@ -13,7 +13,7 @@ app = FastAPI(
 )
 app.include_router(websocket_router)
 
-# 2. إعدادات CORS (للسماح للفرونت إند بالاتصال)
+# 2. CORS settings (to allow frontend connection)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -23,7 +23,7 @@ app.add_middleware(
 )
 
 
-# 3. تضمين الراوتات الموحدة (Include Routers)
+# 3. Include unified routers
 app.include_router(api_router, prefix="/api/v1")
 
 

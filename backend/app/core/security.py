@@ -14,10 +14,10 @@ from app.models.admin import Admin
 from app.core.redis import redis_client
 
 
-# 1️⃣ تشفير كلمات السر
+# 1️⃣ Password hashing
 password_hash = PasswordHash.recommended()
 
-# 2️⃣ نظام حماية Bearer Token لـ Swagger UI (مربع لصق التوكن مباشرة)
+# 2️⃣ Bearer Token protection system for Swagger UI (direct token paste box)
 security_scheme = HTTPBearer()
 
 
@@ -78,23 +78,23 @@ def decode_token(token: str) -> dict:
         )
 
 
-# 🟢 3️⃣ دالة استخراج الـ Token من الهيدر (مع Swagger)
+# 🟢 3️⃣ Function to extract Token from header (with Swagger)
 async def get_token_from_header(
     auth: HTTPAuthorizationCredentials = Depends(security_scheme),
 ) -> str:
     return auth.credentials
 
 
-# 🟢 4️⃣ دالة جلب الأدمن الحالي (Async بالكامل)
+# 🟢 4️⃣ Function to get current admin (fully Async)
 async def get_current_admin(
     token: str = Depends(get_token_from_header),
-    db: AsyncSession = Depends(get_db), # 👈 جلسة Async
+    db: AsyncSession = Depends(get_db), # 👈 Async session
 ) -> Admin:
 
     payload = decode_token(token)
     jti = payload.get("jti")
 
-    # 🟢 فحص التوكن المبطّل في Redis باستخدام await
+    # 🟢 Check revoked token in Redis using await
     if jti and await redis_client.exists(f"revoked_token:{jti}"):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -103,7 +103,7 @@ async def get_current_admin(
 
     admin_id_str = payload["sub"]
 
-    # تحويل معرف الأدمن لنوع UUID للتوافق مع PostgreSQL
+    # Convert admin ID to UUID type for PostgreSQL compatibility
     try:
         admin_id_uuid = uuid.UUID(admin_id_str)
     except ValueError:
@@ -112,7 +112,7 @@ async def get_current_admin(
             detail="Invalid admin ID format",
         )
 
-    # 🟢 استعلام قاعدة البيانات بصيغة Async Select
+    # 🟢 Database query in Async Select format
     stmt = select(Admin).where(Admin.id == admin_id_uuid)
     result = await db.execute(stmt)
     admin = result.scalars().first()

@@ -18,6 +18,7 @@ async def get_tables_status(
     db: AsyncSession = Depends(get_db),
     current_admin=Depends(get_current_admin),
 ):
+    """Get real-time status of all tables from Redis."""
     keys = await redis_client.keys("table:*:status")
 
     zones_result = await db.execute(select(Zone))
@@ -42,6 +43,7 @@ async def get_workers_status(
     db: AsyncSession = Depends(get_db),
     current_admin=Depends(get_current_admin),
 ):
+    """Get real-time status of all workers from Redis."""
     keys = await redis_client.keys("worker:*:status")
 
     worker_states_result = await db.execute(select(WorkerState))
@@ -71,6 +73,7 @@ async def get_zones_occupancy(
     db: AsyncSession = Depends(get_db),
     current_admin=Depends(get_current_admin),
 ):
+    """Get real-time occupancy count for all zones from Redis."""
     keys = await redis_client.keys("zone:*:count")
 
     zones_result = await db.execute(select(Zone))
@@ -98,6 +101,7 @@ async def get_customer_sessions(
     db: AsyncSession = Depends(get_db),
     current_admin=Depends(get_current_admin),
 ):
+    """Get customer sessions with optional status filtering."""
     query = select(CustomerSession)
     if status is not None:
         query = query.where(CustomerSession.status == status)

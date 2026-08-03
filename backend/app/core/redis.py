@@ -1,5 +1,5 @@
 
-# إدارة الاتصال بـ Redis (Pub/Sub & Fast State Store)
+# Redis connection management (Pub/Sub & Fast State Store)
 
 import redis.asyncio as aioredis
 from app.core.config import settings
@@ -8,10 +8,10 @@ import redis.asyncio as redis
 from app.core.config import settings
 
 
-# جلب رابط Redis من الإعدادات أو استخدام الرابط الافتراضي
+# Get Redis URL from settings or use default
 REDIS_URL = getattr(settings, "REDIS_URL", "redis://localhost:6379/0")
 
-# إنشاء كائن الاتصال المباشر بـ Redis
+# Create direct Redis connection object
 redis_client = aioredis.from_url(
     REDIS_URL,
     encoding="utf-8",
@@ -35,6 +35,6 @@ redis_client: redis.Redis = redis.Redis(
 
 
 async def get_redis_client() -> AsyncGenerator[redis.Redis, None]:
-    """Dependency لتمرير عميل Redis للـ Endpoints, same call shape as get_db()."""
+    """Dependency to pass Redis client to Endpoints, same call shape as get_db()."""
     yield redis_client
 

@@ -17,6 +17,7 @@ async def get_alerts(
     db: AsyncSession = Depends(get_db),
     current_admin=Depends(get_current_admin),
 ):
+    """Retrieve alerts with optional status filtering."""
     query = select(Alert)
     if status is not None:
         query = query.where(Alert.status == status)
@@ -50,6 +51,7 @@ async def resolve_alert(
     db: AsyncSession = Depends(get_db),
     current_admin=Depends(get_current_admin),
 ):
+    """Mark an alert as resolved."""
     result = await db.execute(select(Alert).where(Alert.id == alert_id))
     alert = result.scalars().first()
 

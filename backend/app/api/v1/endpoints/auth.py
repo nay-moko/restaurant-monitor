@@ -26,7 +26,7 @@ from app.core.security import (
 from app.services.email_service import send_otp_email
 from app.core.redis import redis_client
 
-# تعريف الراوتر مع إضافة Tag مخصص ليظهر منظم في Swagger UI
+# Define router with custom Tag to appear organized in Swagger UI
 router = APIRouter()
 
 
@@ -207,7 +207,7 @@ async def request_password_otp(
             otp=otp,
         )
     except Exception as e:
-        print(f"⚠️ Warning: Could not send email. Error: {e}")
+        print(f"Warning: Could not send email. Error: {e}")
 
     return MessageResponse(
         message="OTP code has been generated and sent successfully."

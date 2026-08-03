@@ -1,17 +1,17 @@
-# تهيئة اتصال قاعدة البيانات (PostgreSQL / Async SQLAlchemy)
+# Database connection initialization (PostgreSQL / Async SQLAlchemy)
 from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 from app.core.config import settings
 
-# إنشاء المحرك الـ Async
+# Create Async engine
 engine = create_async_engine(
     settings.DATABASE_URL,
-    echo=False,  # اجعلها True لو أردت طباعة استعلامات SQL في الـ Terminal
+    echo=False,  # Set to True if you want to print SQL queries in Terminal
     future=True
 )
 
-# مصنع الجلسات الـ Async
+# Async session factory
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,
     class_=AsyncSession,
@@ -20,12 +20,12 @@ AsyncSessionLocal = async_sessionmaker(
     autoflush=False
 )
 
-# Base Class الموحد لجميع الـ Models
+# Unified Base Class for all Models
 class Base(DeclarativeBase):
     pass
 
 async def get_db() -> AsyncGenerator:
-    """Dependency لتمرير جلسة قاعدة البيانات للـ Endpoints"""
+    """Dependency to pass database session to Endpoints"""
     async with AsyncSessionLocal() as session:
         try:
             yield session
