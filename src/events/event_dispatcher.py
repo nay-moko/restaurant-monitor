@@ -17,6 +17,10 @@ changes to event_engine.py/live_pipeline.py:
   idle_duration_seconds exceeds the configured system_settings.worker_idle_limit,
   deduped per idle episode via an in-memory set cleared on WORKER_ACTIVE.
 
+WebSocket addendum: every successfully-dispatched event is also broadcast,
+after its DB/Redis writes land, to every connected /ws/dashboard client via
+backend/app/websockets/manager.py's ConnectionManager singleton.
+
 Design
 ------
 - EventDispatcher takes a real AsyncSession (backend/app/core/database.py's
@@ -80,6 +84,7 @@ from app.models import (  # noqa: E402
     WorkerRole,
     WorkerState,
 )
+from app.websockets.manager import manager as ws_manager  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +137,9 @@ def _utcnow() -> datetime:
 
 
 class EventDispatcher:
-    """Routes EventEngine's plain-dict events into Postgres/Redis.
+    """Routes EventEngine's plain-dict events into Postgres/Redis, and
+    broadcasts each successfully-dispatched event to every connected
+    WebSocket dashboard client.
 
     Parameters
     ----------
@@ -198,6 +205,13 @@ class EventDispatcher:
                 async with self._db.begin_nested():
                     await self.dispatch_one(event)
                 result.succeeded += 1
+                # WebSocket addendum: broadcast only after this event's
+                # writes have actually succeeded (past the SAVEPOINT block
+                # above, past the try's success path) -- never for an event
+                # that ended up in result.failures. A broadcast() to zero
+                # connected clients is a safe no-op (ConnectionManager
+                # simply iterates an empty list).
+                await ws_manager.broadcast(event)
             except Exception as exc:  # noqa: BLE001 - intentional: isolate one bad event from the rest of the batch
                 logger.error(
                     "EventDispatcher failed on event %r: %s", event, exc, exc_info=True
