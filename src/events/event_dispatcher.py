@@ -21,6 +21,21 @@ WebSocket addendum: every successfully-dispatched event is also broadcast,
 after its DB/Redis writes land, to every connected /ws/dashboard client via
 backend/app/websockets/manager.py's ConnectionManager singleton.
 
+NEW_ALERT addendum: DELAY_ALERT and STAFF_IDLE are the only two event_types
+that can actually create a row in the `alerts` table -- but only DELAY_ALERT
+does so unconditionally, while STAFF_IDLE only does so sometimes (once per
+idle episode, gated by the idle-limit check and the dedup set). Frontend
+clients listening on the raw event stream have no reliable way to tell
+"a STAFF_IDLE just happened" apart from "a STAFF_IDLE just happened AND it
+crossed the threshold AND an alert row was actually created" -- both look
+identical on the wire as an ordinary STAFF_IDLE event. Rather than
+documenting this ambiguity as something the frontend must work around, both
+alert-creating handlers now also broadcast one extra, explicit event
+immediately after the corresponding `self._db.add(Alert(...))` call: a
+synthetic `NEW_ALERT` event carrying the real alert_type and message inside
+`details`. This is a second, additional broadcast alongside the handler's
+"real" event broadcast in dispatch() -- not a replacement for it.
+
 Design
 ------
 - EventDispatcher takes a real AsyncSession (backend/app/core/database.py's
@@ -210,7 +225,12 @@ class EventDispatcher:
                 # above, past the try's success path) -- never for an event
                 # that ended up in result.failures. A broadcast() to zero
                 # connected clients is a safe no-op (ConnectionManager
-                # simply iterates an empty list).
+                # simply iterates an empty list). Note: this broadcasts the
+                # *original* event (e.g. plain STAFF_IDLE) -- the extra,
+                # explicit NEW_ALERT signal (see module docstring) is
+                # broadcast separately, from inside the handler itself,
+                # only on the subset of calls that actually created an
+                # Alert row.
                 await ws_manager.broadcast(event)
             except Exception as exc:  # noqa: BLE001 - intentional: isolate one bad event from the rest of the batch
                 logger.error(
@@ -230,6 +250,33 @@ class EventDispatcher:
                 f"No routing rule for event_type={event_type!r}"
             )
         await handler(event)
+
+    # -- NEW_ALERT broadcast helper -----------------------------------------
+
+    async def _broadcast_new_alert(
+        self,
+        event: dict[str, Any],
+        *,
+        alert_type: str,
+        message: str,
+    ) -> None:
+        """Broadcasts one extra, explicit event the moment an Alert row is
+        actually created -- called from inside a handler, right after the
+        corresponding self._db.add(Alert(...)) call, in addition to (not
+        instead of) that handler's own event getting broadcast normally by
+        dispatch(). See module docstring's "NEW_ALERT addendum" for why this
+        exists: STAFF_IDLE alone is not a reliable signal that an alert was
+        actually created, since most STAFF_IDLE events don't cross the idle
+        threshold and don't create one."""
+        await ws_manager.broadcast(
+            {
+                "event_type": "NEW_ALERT",
+                "camera_id": event.get("camera_id"),
+                "zone_id": event.get("zone_id"),
+                "global_id": event.get("global_id"),
+                "details": {"alert_type": alert_type, "message": message},
+            }
+        )
 
     # -- events_log helper -----------------------------------------------------
 
@@ -424,21 +471,30 @@ class EventDispatcher:
             # see the dedup strategy note in __init__.
             return
 
+        message = (
+            f"Worker {entity_id} has been idle for {idle_duration:.0f}s, "
+            f"exceeding the configured {limit}s idle limit."
+        )
         self._db.add(
             Alert(
                 alert_type="WORKER_IDLE_TOO_LONG",
                 entity_id=entity_id,
                 camera_id=event.get("camera_id"),
                 zone_id=event.get("zone_id"),
-                message=(
-                    f"Worker {entity_id} has been idle for {idle_duration:.0f}s, "
-                    f"exceeding the configured {limit}s idle limit."
-                ),
+                message=message,
                 status=AlertStatusEnum.ACTIVE,
                 details={"idle_duration_seconds": idle_duration, "worker_idle_limit": limit},
             )
         )
         self._workers_with_active_idle_alert.add(entity_id)
+
+        # NEW_ALERT addendum: this is the one branch of _handle_staff_idle
+        # that actually creates an Alert row (gated above by the threshold
+        # check and the dedup set) -- broadcast the explicit signal here,
+        # as the very last statement, so it only fires on a real new alert.
+        await self._broadcast_new_alert(
+            event, alert_type="WORKER_IDLE_TOO_LONG", message=message
+        )
 
     async def _handle_worker_active(self, event: dict[str, Any]) -> None:
         await self._insert_event_log(
@@ -483,6 +539,13 @@ class EventDispatcher:
                 status=AlertStatusEnum.ACTIVE,
                 details=details,
             )
+        )
+
+        # NEW_ALERT addendum: unlike STAFF_IDLE, every DELAY_ALERT event
+        # unconditionally creates an Alert row -- so this broadcast is
+        # unconditional too, as the last statement in this handler.
+        await self._broadcast_new_alert(
+            event, alert_type=event["event_type"], message=message
         )
 
     async def _handle_zone_transition(self, event: dict[str, Any]) -> None:
