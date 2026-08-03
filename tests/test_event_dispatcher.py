@@ -50,7 +50,10 @@ from app.models import (  # noqa: E402
     AlertStatusEnum,
     Camera,
     CameraStatus,
+    CustomerSession,
+    CustomerSessionStatus,
     EventLog,
+    SystemSetting,
     TableState,
     TableStateEnum,
     WorkerActivityStatus,
@@ -175,8 +178,27 @@ async def camera_with_zones(db_session: Any):
         await db_session.execute(delete(Alert).where(Alert.camera_id == camera_id))
         await db_session.execute(delete(WorkerState).where(WorkerState.camera_id == camera_id))
         await db_session.execute(delete(TableState).where(TableState.camera_id == camera_id))
+        await db_session.execute(delete(CustomerSession).where(CustomerSession.camera_id == camera_id))
         await db_session.execute(delete(Zone).where(Zone.camera_id == camera_id))
         await db_session.execute(delete(Camera).where(Camera.id == camera_id))
+        await db_session.commit()
+
+
+@pytest.fixture()
+async def clean_system_settings(db_session: Any):
+    """Task 10: system_settings has no seed row from the initial migration
+    (confirmed in alembic/versions/15ed379f4248_initial_schema_setup.py --
+    only the table is created, no INSERT), but leaves no guarantee some
+    other manual/test run didn't leave a row behind. Deletes every
+    system_settings row before and after the test so
+    "no row -> fallback default" and "row with a specific worker_idle_limit"
+    tests are deterministic regardless of what's already in the real table."""
+    await db_session.execute(delete(SystemSetting))
+    await db_session.commit()
+    try:
+        yield
+    finally:
+        await db_session.execute(delete(SystemSetting))
         await db_session.commit()
 
 
@@ -493,3 +515,249 @@ async def test_dispatch_isolates_a_real_fk_constraint_violation_and_keeps_proces
     # between them in the same batch/session.
     assert len(logs) == 2
     assert {r.entity_id for r in logs} == {"test9_c2", "test9_c3"}
+
+
+# ---------------------------------------------------------------------------
+# Task 10: customer_sessions tracking
+# ---------------------------------------------------------------------------
+
+async def test_customer_seated_creates_customer_session_row(dispatcher, db_session, camera_with_zones):
+    camera_id, table_zone_id, _service_zone_id = camera_with_zones
+    gid = "test10_customer_1"
+    event = make_event(
+        "CUSTOMER_SEATED", camera_id, zone_id=table_zone_id, global_id=gid, track_id=1,
+    )
+
+    result = await dispatcher.dispatch([event])
+    await db_session.commit()
+    assert result.succeeded == 1
+
+    rows = (await db_session.execute(
+        select(CustomerSession).where(CustomerSession.entity_id == gid)
+    )).scalars().all()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.table_zone_id == table_zone_id
+    assert row.camera_id == camera_id
+    assert row.started_at is not None
+    assert row.last_seen_at == row.started_at
+    assert row.left_at is None
+    assert row.total_stay_sec is None
+    assert row.status == CustomerSessionStatus.ACTIVE
+
+
+async def test_customer_left_closes_matching_open_session(dispatcher, db_session, camera_with_zones):
+    camera_id, table_zone_id, _service_zone_id = camera_with_zones
+    gid = "test10_customer_2"
+
+    seated = make_event("CUSTOMER_SEATED", camera_id, zone_id=table_zone_id, global_id=gid, track_id=2)
+    result1 = await dispatcher.dispatch([seated])
+    await db_session.commit()
+    assert result1.succeeded == 1
+
+    opened = (await db_session.execute(
+        select(CustomerSession).where(CustomerSession.entity_id == gid)
+    )).scalar_one()
+    started_at = opened.started_at
+
+    left = make_event(
+        "CUSTOMER_LEFT", camera_id, zone_id=table_zone_id, global_id=gid, track_id=2,
+        details={"duration_seconds": 30.0, "reason": "zone_change"},
+    )
+    result2 = await dispatcher.dispatch([left])
+    await db_session.commit()
+    assert result2.succeeded == 1
+
+    # Still exactly one row -- CUSTOMER_LEFT updates the same session it
+    # opened, it does not insert a second one.
+    rows = (await db_session.execute(
+        select(CustomerSession).where(CustomerSession.entity_id == gid)
+    )).scalars().all()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.started_at == started_at
+    assert row.left_at is not None
+    assert row.left_at >= row.started_at
+    assert row.last_seen_at == row.left_at
+    assert row.total_stay_sec is not None
+    assert row.total_stay_sec >= 0
+    assert row.status == CustomerSessionStatus.COMPLETED
+
+
+async def test_customer_left_with_no_open_session_logs_warning_and_does_not_crash(
+    dispatcher, db_session, camera_with_zones, caplog
+):
+    camera_id, table_zone_id, _service_zone_id = camera_with_zones
+    gid = "test10_customer_no_session"
+
+    event = make_event(
+        "CUSTOMER_LEFT", camera_id, zone_id=table_zone_id, global_id=gid, track_id=3,
+        details={"duration_seconds": 5.0, "reason": "zone_change"},
+    )
+
+    with caplog.at_level("WARNING", logger="src.events.event_dispatcher"):
+        result = await dispatcher.dispatch([event])
+        await db_session.commit()
+
+    assert result.succeeded == 1
+    assert result.failed == 0
+    assert any(
+        "no matching open" in rec.message and gid in rec.message
+        for rec in caplog.records
+    )
+
+    rows = (await db_session.execute(
+        select(CustomerSession).where(CustomerSession.entity_id == gid)
+    )).scalars().all()
+    assert rows == []
+
+    # The events_log insert (the pre-existing Task 9 behavior) still happened.
+    logs = (await db_session.execute(
+        select(EventLog).where(EventLog.camera_id == camera_id).where(EventLog.entity_id == gid)
+    )).scalars().all()
+    assert len(logs) == 1
+
+
+# ---------------------------------------------------------------------------
+# Task 10: worker idle alert generation
+# ---------------------------------------------------------------------------
+
+async def test_staff_idle_below_limit_creates_no_alert(
+    dispatcher, db_session, camera_with_zones, clean_system_settings
+):
+    camera_id, _table_zone_id, service_zone_id = camera_with_zones
+    db_session.add(SystemSetting(worker_idle_limit=10))
+    await db_session.commit()
+
+    gid = "test10_worker_below_limit"
+    event = make_event(
+        "STAFF_IDLE", camera_id, zone_id=service_zone_id, global_id=gid, track_id=4,
+        details={"idle_frames": 30, "idle_duration_seconds": 5.0, "threshold_frames": 30},
+    )
+
+    result = await dispatcher.dispatch([event])
+    await db_session.commit()
+    assert result.succeeded == 1
+
+    alerts = (await db_session.execute(
+        select(Alert).where(Alert.entity_id == gid)
+    )).scalars().all()
+    assert alerts == []
+
+
+async def test_staff_idle_above_limit_creates_exactly_one_worker_idle_alert(
+    dispatcher, db_session, camera_with_zones, clean_system_settings
+):
+    camera_id, _table_zone_id, service_zone_id = camera_with_zones
+    db_session.add(SystemSetting(worker_idle_limit=10))
+    await db_session.commit()
+
+    gid = "test10_worker_above_limit"
+    event = make_event(
+        "STAFF_IDLE", camera_id, zone_id=service_zone_id, global_id=gid, track_id=5,
+        details={"idle_frames": 300, "idle_duration_seconds": 25.0, "threshold_frames": 300},
+    )
+
+    result = await dispatcher.dispatch([event])
+    await db_session.commit()
+    assert result.succeeded == 1
+
+    alerts = (await db_session.execute(
+        select(Alert).where(Alert.entity_id == gid)
+    )).scalars().all()
+    assert len(alerts) == 1
+    alert = alerts[0]
+    assert alert.alert_type == "WORKER_IDLE_TOO_LONG"
+    assert alert.zone_id == service_zone_id
+    assert alert.camera_id == camera_id
+    assert alert.status == AlertStatusEnum.ACTIVE
+    assert "25" in alert.message
+
+
+async def test_second_staff_idle_for_still_idle_worker_does_not_duplicate_alert(
+    dispatcher, db_session, camera_with_zones, clean_system_settings
+):
+    camera_id, _table_zone_id, service_zone_id = camera_with_zones
+    db_session.add(SystemSetting(worker_idle_limit=10))
+    await db_session.commit()
+
+    gid = "test10_worker_repeat_idle"
+    first = make_event(
+        "STAFF_IDLE", camera_id, zone_id=service_zone_id, global_id=gid, track_id=6,
+        details={"idle_frames": 300, "idle_duration_seconds": 25.0, "threshold_frames": 300},
+    )
+    second = make_event(
+        "STAFF_IDLE", camera_id, zone_id=service_zone_id, global_id=gid, track_id=6,
+        details={"idle_frames": 400, "idle_duration_seconds": 35.0, "threshold_frames": 300},
+    )
+
+    result = await dispatcher.dispatch([first, second])
+    await db_session.commit()
+    assert result.succeeded == 2
+    assert result.failed == 0
+
+    alerts = (await db_session.execute(
+        select(Alert).where(Alert.entity_id == gid)
+    )).scalars().all()
+    assert len(alerts) == 1
+
+    # A WORKER_ACTIVE for the same worker ends the idle episode; a later
+    # STAFF_IDLE past the threshold must be able to alert again.
+    active = make_event(
+        "WORKER_ACTIVE", camera_id, zone_id=service_zone_id, global_id=gid, track_id=6,
+        details={"idle_duration_seconds": 35.0},
+    )
+    third = make_event(
+        "STAFF_IDLE", camera_id, zone_id=service_zone_id, global_id=gid, track_id=6,
+        details={"idle_frames": 300, "idle_duration_seconds": 25.0, "threshold_frames": 300},
+    )
+    result2 = await dispatcher.dispatch([active, third])
+    await db_session.commit()
+    assert result2.succeeded == 2
+
+    alerts2 = (await db_session.execute(
+        select(Alert).where(Alert.entity_id == gid)
+    )).scalars().all()
+    assert len(alerts2) == 2
+
+
+async def test_staff_idle_with_no_system_settings_row_falls_back_to_default(
+    dispatcher, db_session, camera_with_zones, clean_system_settings
+):
+    """No SystemSetting row at all (fresh install) -- must fall back to the
+    documented default (DEFAULT_WORKER_IDLE_LIMIT_SECONDS = 60 in
+    src/events/event_dispatcher.py) instead of crashing."""
+    camera_id, _table_zone_id, service_zone_id = camera_with_zones
+
+    settings_rows = (await db_session.execute(select(SystemSetting))).scalars().all()
+    assert settings_rows == []  # clean_system_settings guarantees this
+
+    gid = "test10_worker_no_settings_row"
+    below_default = make_event(
+        "STAFF_IDLE", camera_id, zone_id=service_zone_id, global_id=gid, track_id=7,
+        details={"idle_frames": 300, "idle_duration_seconds": 30.0, "threshold_frames": 300},
+    )
+    result = await dispatcher.dispatch([below_default])
+    await db_session.commit()
+    assert result.succeeded == 1
+    assert result.failed == 0
+
+    alerts = (await db_session.execute(
+        select(Alert).where(Alert.entity_id == gid)
+    )).scalars().all()
+    assert alerts == []  # 30s idle < the 60s default -- no alert
+
+    above_default = make_event(
+        "STAFF_IDLE", camera_id, zone_id=service_zone_id, global_id=gid, track_id=7,
+        details={"idle_frames": 700, "idle_duration_seconds": 70.0, "threshold_frames": 300},
+    )
+    result2 = await dispatcher.dispatch([above_default])
+    await db_session.commit()
+    assert result2.succeeded == 1
+    assert result2.failed == 0
+
+    alerts2 = (await db_session.execute(
+        select(Alert).where(Alert.entity_id == gid)
+    )).scalars().all()
+    assert len(alerts2) == 1  # 70s idle > the 60s default -- alert raised
+    assert alerts2[0].alert_type == "WORKER_IDLE_TOO_LONG"

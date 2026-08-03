@@ -7,6 +7,7 @@ from app.core.redis import get_redis_client
 from app.core.security import get_current_admin
 from app.models.zone import Zone
 from app.models.worker_state import WorkerState
+from app.models.customer_session import CustomerSession, CustomerSessionStatus
 
 router = APIRouter()
 
@@ -89,3 +90,36 @@ async def get_zones_occupancy(
         })
 
     return {"zones": occupancy}
+
+
+@router.get("/customer-sessions")
+async def get_customer_sessions(
+    status: CustomerSessionStatus | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_admin=Depends(get_current_admin),
+):
+    query = select(CustomerSession)
+    if status is not None:
+        query = query.where(CustomerSession.status == status)
+    else:
+        query = query.where(CustomerSession.status == CustomerSessionStatus.ACTIVE)
+
+    result = await db.execute(query.order_by(CustomerSession.started_at.desc()))
+    sessions = result.scalars().all()
+
+    return {
+        "customer_sessions": [
+            {
+                "id": session.id,
+                "entity_id": session.entity_id,
+                "table_zone_id": session.table_zone_id,
+                "camera_id": session.camera_id,
+                "started_at": session.started_at,
+                "last_seen_at": session.last_seen_at,
+                "left_at": session.left_at,
+                "total_stay_sec": session.total_stay_sec,
+                "status": session.status,
+            }
+            for session in sessions
+        ]
+    }

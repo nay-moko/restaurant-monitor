@@ -8,6 +8,15 @@ src/events/event_engine.py, not modified by this task) into the real,
 already-provisioned PostgreSQL database (backend/app/models/*, migrated via
 `alembic upgrade head`) and the real local Redis instance.
 
+Task 10 (see docs/TASK10_REPORT.md) extended two of those same handlers,
+using event types EventEngine already produces -- no new event types, no
+changes to event_engine.py/live_pipeline.py:
+- CUSTOMER_SEATED/CUSTOMER_LEFT now also open/close a customer_sessions row
+  (session start/last-seen/departure/total duration).
+- STAFF_IDLE now also raises a WORKER_IDLE_TOO_LONG alert once
+  idle_duration_seconds exceeds the configured system_settings.worker_idle_limit,
+  deduped per idle episode via an in-memory set cleared on WORKER_ACTIVE.
+
 Design
 ------
 - EventDispatcher takes a real AsyncSession (backend/app/core/database.py's
@@ -54,13 +63,17 @@ if str(_BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(_BACKEND_DIR))
 
 import redis.asyncio as aioredis  # noqa: E402
+from sqlalchemy import select  # noqa: E402
 from sqlalchemy.dialects.postgresql import insert as pg_insert  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 
 from app.models import (  # noqa: E402
     Alert,
     AlertStatusEnum,
+    CustomerSession,
+    CustomerSessionStatus,
     EventLog,
+    SystemSetting,
     TableState,
     TableStateEnum,
     WorkerActivityStatus,
@@ -69,6 +82,12 @@ from app.models import (  # noqa: E402
 )
 
 logger = logging.getLogger(__name__)
+
+# Task 10: SystemSetting.worker_idle_limit's own column default
+# (backend/app/models/setting.py) -- used when the table has no row yet
+# (fresh install), so a missing settings row degrades to "use the same
+# default the column itself declares" rather than crashing the dispatcher.
+DEFAULT_WORKER_IDLE_LIMIT_SECONDS = 60
 
 
 class EventDispatcherError(Exception):
@@ -131,6 +150,23 @@ class EventDispatcher:
     def __init__(self, db: AsyncSession, redis_client: "aioredis.Redis"):
         self._db = db
         self._redis = redis_client
+        # Task 10: per-worker dedup for WORKER_IDLE_TOO_LONG alerts -- an
+        # in-memory, dispatcher-instance-scoped set of entity_ids that
+        # already have an alert raised for their *current* idle episode.
+        # Populated in _handle_staff_idle, cleared in _handle_worker_active
+        # (the episode ending is exactly what should allow the next idle
+        # episode to alert again). See docs/TASK10_REPORT.md for why this
+        # was chosen over a per-event "query for an existing unresolved
+        # alert" check: it's a single dict lookup instead of an extra
+        # round-trip to Postgres on every STAFF_IDLE event, and this class
+        # already follows the same in-memory-dict-for-per-entity-state
+        # pattern as CentralIdentityStore/EventEngine. Traded off: this
+        # state does not survive a dispatcher restart mid-episode, so a
+        # restart could in theory produce one duplicate alert for a
+        # still-ongoing idle episode -- acceptable, same category of
+        # limitation as CUSTOMER_LEFT's "no matching open session" case
+        # below.
+        self._workers_with_active_idle_alert: set[str] = set()
         self._routes: dict[str, Callable[[dict], Awaitable[None]]] = {
             "CUSTOMER_SEATED": self._handle_customer_seated,
             "CUSTOMER_LEFT": self._handle_customer_left,
@@ -269,6 +305,39 @@ class EventDispatcher:
         # map staleness risk for a Core-level upsert.
         self._db.expire_all()
 
+    # -- customer_sessions helpers (Task 10) --------------------------------------
+
+    async def _find_open_customer_session(self, entity_id: str | None) -> CustomerSession | None:
+        if entity_id is None:
+            return None
+        stmt = (
+            select(CustomerSession)
+            .where(CustomerSession.entity_id == entity_id)
+            .where(CustomerSession.left_at.is_(None))
+            .order_by(CustomerSession.started_at.desc())
+            .limit(1)
+        )
+        return (await self._db.execute(stmt)).scalar_one_or_none()
+
+    # -- system_settings helper (Task 10) -----------------------------------------
+
+    async def _current_worker_idle_limit(self) -> int:
+        """Reads system_settings.worker_idle_limit (the one -- effectively
+        singleton -- settings row; oldest by id if more than one ever
+        exists). Falls back to DEFAULT_WORKER_IDLE_LIMIT_SECONDS, logged at
+        warning level, if the table has no row yet (fresh install) rather
+        than crashing the dispatcher."""
+        stmt = select(SystemSetting).order_by(SystemSetting.id).limit(1)
+        row = (await self._db.execute(stmt)).scalar_one_or_none()
+        if row is None:
+            logger.warning(
+                "No system_settings row found -- falling back to default "
+                "worker_idle_limit=%ss",
+                DEFAULT_WORKER_IDLE_LIMIT_SECONDS,
+            )
+            return DEFAULT_WORKER_IDLE_LIMIT_SECONDS
+        return row.worker_idle_limit
+
     # -- handlers, one per routing-table row --------------------------------------
 
     async def _handle_customer_seated(self, event: dict[str, Any]) -> None:
@@ -276,10 +345,44 @@ class EventDispatcher:
             event, role=WorkerRole.CUSTOMER.value, previous_state=None, new_state="SEATED"
         )
 
+        now = _utcnow()
+        self._db.add(
+            CustomerSession(
+                entity_id=event.get("global_id"),
+                table_zone_id=event.get("zone_id"),
+                camera_id=event.get("camera_id"),
+                started_at=now,
+                last_seen_at=now,
+                status=CustomerSessionStatus.ACTIVE,
+            )
+        )
+
     async def _handle_customer_left(self, event: dict[str, Any]) -> None:
         await self._insert_event_log(
             event, role=WorkerRole.CUSTOMER.value, previous_state="SEATED", new_state="LEFT"
         )
+
+        entity_id = event.get("global_id")
+        session_row = await self._find_open_customer_session(entity_id)
+        if session_row is None:
+            # Either a genuinely stray CUSTOMER_LEFT, or (more likely in
+            # practice) the dispatcher restarted mid-session and lost track
+            # of the CUSTOMER_SEATED row that opened it. Either way there is
+            # no real session state to close -- log and move on rather than
+            # fabricating one.
+            logger.warning(
+                "CUSTOMER_LEFT for entity_id=%s has no matching open "
+                "customer_sessions row (dispatcher may have restarted "
+                "mid-session) -- skipping session close",
+                entity_id,
+            )
+            return
+
+        now = _utcnow()
+        session_row.left_at = now
+        session_row.last_seen_at = now
+        session_row.total_stay_sec = round((now - session_row.started_at).total_seconds())
+        session_row.status = CustomerSessionStatus.COMPLETED
 
     async def _handle_staff_idle(self, event: dict[str, Any]) -> None:
         await self._insert_event_log(
@@ -293,6 +396,36 @@ class EventDispatcher:
             f"worker:{event['global_id']}:status", WorkerActivityStatus.IDLE.value
         )
 
+        entity_id = event.get("global_id")
+        details = event.get("details") or {}
+        idle_duration = details.get("idle_duration_seconds")
+        if idle_duration is None or entity_id is None:
+            return
+
+        limit = await self._current_worker_idle_limit()
+        if idle_duration <= limit:
+            return
+        if entity_id in self._workers_with_active_idle_alert:
+            # Already alerted for this same, still-ongoing idle episode --
+            # see the dedup strategy note in __init__.
+            return
+
+        self._db.add(
+            Alert(
+                alert_type="WORKER_IDLE_TOO_LONG",
+                entity_id=entity_id,
+                camera_id=event.get("camera_id"),
+                zone_id=event.get("zone_id"),
+                message=(
+                    f"Worker {entity_id} has been idle for {idle_duration:.0f}s, "
+                    f"exceeding the configured {limit}s idle limit."
+                ),
+                status=AlertStatusEnum.ACTIVE,
+                details={"idle_duration_seconds": idle_duration, "worker_idle_limit": limit},
+            )
+        )
+        self._workers_with_active_idle_alert.add(entity_id)
+
     async def _handle_worker_active(self, event: dict[str, Any]) -> None:
         await self._insert_event_log(
             event,
@@ -304,6 +437,11 @@ class EventDispatcher:
         await self._redis.set(
             f"worker:{event['global_id']}:status", WorkerActivityStatus.ACTIVE.value
         )
+
+        # The worker is active again -- this idle episode is over, so the
+        # next STAFF_IDLE for this entity_id is a *new* episode and should
+        # be able to raise its own WORKER_IDLE_TOO_LONG alert.
+        self._workers_with_active_idle_alert.discard(event.get("global_id"))
 
     async def _handle_delay_alert(self, event: dict[str, Any]) -> None:
         await self._insert_event_log(

@@ -41,7 +41,16 @@ from sqlalchemy import select
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
 
-from app.models import Alert, EventLog, TableState, WorkerState  # noqa: E402
+from sqlalchemy import delete  # noqa: E402
+
+from app.models import (  # noqa: E402
+    Alert,
+    CustomerSession,
+    EventLog,
+    SystemSetting,
+    TableState,
+    WorkerState,
+)
 
 from src.core.pipeline_output import FrameOutput, TrackOutput  # noqa: E402
 from src.events.event_dispatcher import EventDispatcher  # noqa: E402
@@ -63,8 +72,28 @@ def make_track(track_id, global_id, role, zone_id, zone_type, action=None) -> Tr
     )
 
 
+@pytest.fixture()
+async def low_worker_idle_limit(db_session):
+    """Task 10: the STAFF_IDLE event this smoke test drives real-fires with
+    idle_duration_seconds=1.3 (see the frame sequence below) -- a
+    worker_idle_limit of 1 second guarantees the WORKER_IDLE_TOO_LONG alert
+    path actually fires within this smoke test's handful of frames, the same
+    way Task 9's own delay_alert_threshold_seconds=1.0 override does for
+    DELAY_ALERT. Deletes any existing system_settings row(s) first so this
+    is deterministic regardless of what's already in the real table, and
+    cleans back up to empty afterwards."""
+    await db_session.execute(delete(SystemSetting))
+    db_session.add(SystemSetting(worker_idle_limit=1))
+    await db_session.commit()
+    try:
+        yield
+    finally:
+        await db_session.execute(delete(SystemSetting))
+        await db_session.commit()
+
+
 async def test_full_pipeline_event_engine_dispatcher_smoke(
-    dispatcher: EventDispatcher, db_session, redis_client, camera_with_zones, capsys
+    dispatcher: EventDispatcher, db_session, redis_client, camera_with_zones, low_worker_idle_limit, capsys
 ):
     camera_id, table_zone, service_zone = camera_with_zones
     customer_gid = f"smoke_customer_{uuid.uuid4().hex[:6]}"
@@ -132,10 +161,13 @@ async def test_full_pipeline_event_engine_dispatcher_smoke(
         select(TableState).where(TableState.zone_id == table_zone)
     )).scalars().all()
     alerts = (await db_session.execute(
-        select(Alert).where(Alert.camera_id == camera_id)
+        select(Alert).where(Alert.camera_id == camera_id).order_by(Alert.id)
+    )).scalars().all()
+    customer_sessions = (await db_session.execute(
+        select(CustomerSession).where(CustomerSession.entity_id == customer_gid)
     )).scalars().all()
 
-    print("\n=== Task 9 end-to-end smoke test: real rows in restaurant_db ===")
+    print("\n=== Task 9/10 end-to-end smoke test: real rows in restaurant_db ===")
     print(f"-- events_log ({len(logs)} rows) --")
     for row in logs:
         print(f"  id={row.id} type={row.event_type} entity_id={row.entity_id} "
@@ -150,9 +182,15 @@ async def test_full_pipeline_event_engine_dispatcher_smoke(
         print(f"  zone_id={row.zone_id} state={row.state} state_started_at={row.state_started_at}")
     print(f"-- alerts ({len(alerts)} rows) --")
     for row in alerts:
-        print(f"  id={row.id} type={row.alert_type} zone_id={row.zone_id} message={row.message!r}")
+        print(f"  id={row.id} type={row.alert_type} entity_id={row.entity_id} "
+              f"zone_id={row.zone_id} message={row.message!r}")
+    print(f"-- customer_sessions ({len(customer_sessions)} rows) --")
+    for row in customer_sessions:
+        print(f"  entity_id={row.entity_id} table_zone_id={row.table_zone_id} "
+              f"started_at={row.started_at} last_seen_at={row.last_seen_at} "
+              f"left_at={row.left_at} total_stay_sec={row.total_stay_sec} status={row.status}")
 
-    print("=== Task 9 end-to-end smoke test: real keys in Redis (db 14) ===")
+    print("=== Task 9/10 end-to-end smoke test: real keys in Redis (db 14) ===")
     redis_keys = {
         f"worker:{worker_gid}:status": await redis_client.get(f"worker:{worker_gid}:status"),
         f"zone:{camera_id}:{table_zone}:last_seen": await redis_client.get(f"zone:{camera_id}:{table_zone}:last_seen"),
@@ -171,8 +209,26 @@ async def test_full_pipeline_event_engine_dispatcher_smoke(
     assert worker_states[0].status.value == "ACTIVE"  # last event for this worker was WORKER_ACTIVE
     assert len(table_states) == 1
     assert table_states[0].state.value == "OCCUPIED"
-    assert len(alerts) == 1
-    assert alerts[0].alert_type == "DELAY_ALERT"
+
+    # Task 10: the STAFF_IDLE at frame 3 (idle_duration_seconds=1.3) crosses
+    # low_worker_idle_limit's worker_idle_limit=1 -- both DELAY_ALERT
+    # (Task 9, pre-existing) and the new WORKER_IDLE_TOO_LONG alert fire in
+    # this same run.
+    assert len(alerts) == 2
+    assert {a.alert_type for a in alerts} == {"DELAY_ALERT", "WORKER_IDLE_TOO_LONG"}
+    idle_alert = next(a for a in alerts if a.alert_type == "WORKER_IDLE_TOO_LONG")
+    assert idle_alert.entity_id == worker_gid
+    assert idle_alert.zone_id == service_zone
+
+    # Task 10: CUSTOMER_SEATED (frame 1) opened a session, CUSTOMER_LEFT
+    # (frame 4) closed the same row -- exactly one row, not two.
+    assert len(customer_sessions) == 1
+    session = customer_sessions[0]
+    assert session.table_zone_id == table_zone
+    assert session.camera_id == camera_id
+    assert session.left_at is not None
+    assert session.total_stay_sec is not None
+    assert session.status.value == "COMPLETED"
 
     assert redis_keys[f"worker:{worker_gid}:status"] == "ACTIVE"
     assert redis_keys[f"zone:{camera_id}:{table_zone}:last_seen"] is not None
