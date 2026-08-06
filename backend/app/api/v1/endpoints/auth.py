@@ -25,6 +25,7 @@ from app.core.security import (
 )
 from app.services.email_service import send_otp_email
 from app.core.redis import redis_client
+from app.core.config import settings
 
 # Define router with custom Tag to appear organized in Swagger UI
 router = APIRouter()
@@ -52,6 +53,22 @@ router = APIRouter()
             "content": {
                 "application/json": {
                     "example": {"detail": "Invalid email or password"}
+                }
+            },
+        },
+        422: {
+            "description": "Validation error - missing or invalid fields.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": [
+                            {
+                                "loc": ["body", "email"],
+                                "msg": "field required",
+                                "type": "value_error.missing"
+                            }
+                        ]
+                    }
                 }
             },
         },
@@ -166,6 +183,22 @@ def get_me(
                 }
             },
         },
+        422: {
+            "description": "Validation error - missing or invalid fields.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": [
+                            {
+                                "loc": ["body", "email"],
+                                "msg": "field required",
+                                "type": "value_error.missing"
+                            }
+                        ]
+                    }
+                }
+            },
+        },
     },
 )
 async def request_password_otp(
@@ -209,6 +242,12 @@ async def request_password_otp(
     except Exception as e:
         print(f"Warning: Could not send email. Error: {e}")
 
+    # In development mode, return OTP in response for testing
+    if settings.DEV_MODE:
+        return MessageResponse(
+            message=f"OTP code has been generated and sent successfully. DEV MODE: OTP is {otp}"
+        )
+
     return MessageResponse(
         message="OTP code has been generated and sent successfully."
     )
@@ -236,6 +275,22 @@ async def request_password_otp(
             "content": {
                 "application/json": {
                     "example": {"detail": "OTP expired"}
+                }
+            },
+        },
+        422: {
+            "description": "Validation error - missing or invalid fields.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": [
+                            {
+                                "loc": ["body", "email"],
+                                "msg": "field required",
+                                "type": "value_error.missing"
+                            }
+                        ]
+                    }
                 }
             },
         },
@@ -321,6 +376,22 @@ async def reset_password(
             "content": {
                 "application/json": {
                     "example": {"detail": "Invalid token"}
+                }
+            },
+        },
+        422: {
+            "description": "Invalid authorization header format.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": [
+                            {
+                                "loc": ["header", "authorization"],
+                                "msg": "Invalid authorization header",
+                                "type": "value_error"
+                            }
+                        ]
+                    }
                 }
             },
         },

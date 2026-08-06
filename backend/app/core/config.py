@@ -39,9 +39,11 @@ class Settings(BaseSettings):
 
     # OTP
     OTP_EXPIRE_MINUTES: int = 10
+    DEV_MODE: bool = False  # Set to true for development bypass
 
     model_config = SettingsConfigDict(
         env_file=Path(__file__).parent.parent.parent.parent / ".env",
+        env_file_encoding="utf-8",
         extra="ignore",
     )
 
