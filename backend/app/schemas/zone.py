@@ -128,11 +128,16 @@ class ZoneCreate(ZoneBase):
     parent_zone_id: Optional[str] = Field(None, description="معرف المنطقة الأب (اختياري)")
     excludes_tables: bool = Field(False, description="هل تستثني المنطقة الطاولات؟")
     auto_generated: bool = Field(False, description="هل تم إنشاء المنطقة تلقائياً؟")
+    original_zone_type: Optional[str] = Field(None, description="القيمة الأصلية لنوع المنطقة قبل التطبيع")
 
     @model_validator(mode='after')
     def normalize_zone_type_field(self):
-        """تطبيع نوع المنطقة للتوافق مع AI Pipeline"""
+        """تطبيع نوع المنطقة للتوافق مع AI Pipeline مع حفظ القيمة الأصلية"""
         if self.zone_type:
+            # حفظ القيمة الأصلية قبل التطبيع إذا لم يتم توفيرها صراحة
+            if not self.original_zone_type:
+                self.original_zone_type = self.zone_type
+            # تطبيع القيمة لقاعدة البيانات
             self.zone_type = normalize_zone_type(self.zone_type)
         return self
 
@@ -145,11 +150,16 @@ class ZoneUpdate(BaseModel):
     parent_zone_id: Optional[str] = Field(None, description="معرف المنطقة الأب")
     excludes_tables: Optional[bool] = Field(None, description="هل تستثني المنطقة الطاولات؟")
     auto_generated: Optional[bool] = Field(None, description="هل تم إنشاء المنطقة تلقائياً؟")
+    original_zone_type: Optional[str] = Field(None, description="القيمة الأصلية لنوع المنطقة قبل التطبيع")
 
     @model_validator(mode='after')
     def normalize_zone_type_field(self):
-        """تطبيع نوع المنطقة للتوافق مع AI Pipeline"""
+        """تطبيع نوع المنطقة للتوافق مع AI Pipeline مع حفظ القيمة الأصلية"""
         if self.zone_type:
+            # حفظ القيمة الأصلية قبل التطبيع إذا لم يتم توفيرها صراحة
+            if not self.original_zone_type:
+                self.original_zone_type = self.zone_type
+            # تطبيع القيمة لقاعدة البيانات
             self.zone_type = normalize_zone_type(self.zone_type)
         return self
 
@@ -161,6 +171,7 @@ class ZoneResponse(BaseModel):
     parent_zone_id: Optional[str]
     name: str
     zone_type: str
+    original_zone_type: Optional[str]
     polygon_coordinates: dict[str, Any]
     auto_generated: bool
     excludes_tables: bool

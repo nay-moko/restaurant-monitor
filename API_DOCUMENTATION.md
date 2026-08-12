@@ -410,8 +410,9 @@ Before using the API, create the initial admin user:
 
 ```bash
 # From project root directory
-python backend/app/seed/seed_cameras.py
-python backend/app/seed/seed_zones.py
+python -m backend.app.seed.seed_cameras
+python -m backend.app.seed.seed_zones
+
 ```
 
 
@@ -424,7 +425,7 @@ The system automatically normalizes zone types for AI pipeline compatibility:
 | `staff_zone`, `staff_area`, `kitchen_area`, `buffet`, `cashier` | `work` | Staff working areas |
 | `walkway`, `service_path`, `hallway`, `corridor`, `entrance`, `entry_exit` | `walk` | Walking paths |
 
-You can send any of the input types, and they will be automatically normalized.
+**Important:** The system preserves the original value chosen by the admin in the `original_zone_type` field, while storing the normalized value in `zone_type` for AI pipeline compatibility.
 
 ---
 
@@ -456,6 +457,7 @@ Retrieve all zones for a specific camera.
     "parent_zone_id": "uuid|null",
     "name": "string",
     "zone_type": "string",
+    "original_zone_type": "string|null",
     "polygon_coordinates": {
       "points": [[x, y], ...],
       "image_size": {"width": int, "height": int}
@@ -493,6 +495,8 @@ Create a new zone.
 ```
 
 **Response:** Zone object (201 Created)
+
+**Important:** The system automatically normalizes the `zone_type` for AI pipeline compatibility and stores the original value in `original_zone_type`.
 
 **Error Responses:**
 - `400`: Invalid request payload

@@ -14,6 +14,7 @@ class Zone(Base):
     parent_zone_id: Mapped[Optional[str]] = mapped_column(String(100), ForeignKey("zones.id"), nullable=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     zone_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    original_zone_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     polygon_coordinates: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     auto_generated: Mapped[bool] = mapped_column(Boolean, default=False)
     excludes_tables: Mapped[bool] = mapped_column(Boolean, default=False)
