@@ -180,6 +180,7 @@ async def create_zone(
         parent_zone_id=zone_data.parent_zone_id,
         name=zone_data.name,
         zone_type=zone_data.zone_type,  # Normalized value (table/work/walk)
+        original_zone_type=zone_data.original_zone_type,
         polygon_coordinates=zone_data.polygon_coordinates.to_dict(),
         auto_generated=zone_data.auto_generated,
         excludes_tables=zone_data.excludes_tables
