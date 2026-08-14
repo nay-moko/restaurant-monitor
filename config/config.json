@@ -5,20 +5,35 @@
     },
     "pipeline": {
         "process_fps": 2,
-        "device": "cuda"
+        "device": "cuda",
+        "use_fp16": false,
+        "batch_size": 16,
+        "batch_interval_ms": 500
     },
     "detector": {
         "model": "models/yolo/yolov8n-pose.pt",
         "conf_threshold": 0.25,
         "imgsz": 640,
         "min_box_width": 2,
-        "min_box_height": 2
+        "min_box_height": 2,
+        "detection_interval": 1
     },
     "tracker": {
         "max_age": 10,
         "n_init": 3,
         "nms_max_overlap": 0.3,
-        "max_cosine_distance": 0.4
+        "max_cosine_distance": 0.4,
+        "tracking_interval": 1
+    },
+    "action": {
+        "model": "models/pose_lstm.pth",
+        "label_encoder": "models/label_encoder.pkl",
+        "interval": 5
+    },
+    "inference_intervals": {
+        "pose_lstm_interval": 5,
+        "role_engine_interval": 30,
+        "table_kbs_interval": 30
     },
     "paths": {
         "videos_index": "data/metadata/videos/videos_index.json",
@@ -28,6 +43,11 @@
         "debug_crops_dir": "data/debug/crops",
         "debug_zones_reference_frames_dir": "data/debug/zones/reference_frames",
         "debug_zones_preview_dir": "data/debug/zones/zones_preview"
+    },
+    "performance": {
+        "max_queue_size": 32,
+        "drop_frames_when_full": true,
+        "log_performance": true
     },
     "debug": {
         "show_live_view": true,

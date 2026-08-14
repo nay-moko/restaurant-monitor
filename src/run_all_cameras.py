@@ -331,6 +331,9 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    import time
+    start_time = time.time()
+    
     # --- إضافة كود تصفير الـ Redis هنا ---
     try:
         print("[orchestrator] جاري تصفير قاعدة بيانات Redis المشتركة لتبدأ الكاميرات بنظافة...")
@@ -340,6 +343,9 @@ def main() -> None:
     except Exception as e:
         print(f"[orchestrator][WARNING] لم نتمكن من الاتصال بـ Redis لتصفيرها: {e}")
     # -------------------------------------
+
+    print("[orchestrator] Using ModelManager singleton for shared AI models across cameras")
+    print("[orchestrator] This will save ~1.5GB VRAM (16 individual model loads → 1 shared copy)")
 
     args = parse_args()
     extra_args = shlex.split(args.extra_args) if args.extra_args else None
@@ -354,8 +360,17 @@ def main() -> None:
         poll_interval=args.poll_interval,
     )
     orchestrator.install_signal_handlers()
+    
+    launch_start = time.time()
     orchestrator.launch_all()
+    launch_time = time.time() - launch_start
+    print(f"[orchestrator] Launched {len(orchestrator.processes)} cameras in {launch_time:.2f}s")
+    
+    supervise_start = time.time()
     orchestrator.supervise()
+    total_time = time.time() - start_time
+    
+    print(f"[orchestrator] Total runtime: {total_time:.2f}s")
 
 
 if __name__ == "__main__":
