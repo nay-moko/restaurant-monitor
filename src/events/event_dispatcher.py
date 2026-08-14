@@ -17,9 +17,22 @@ changes to event_engine.py/live_pipeline.py:
   idle_duration_seconds exceeds the configured system_settings.worker_idle_limit,
   deduped per idle episode via an in-memory set cleared on WORKER_ACTIVE.
 
-WebSocket addendum: every successfully-dispatched event is also broadcast,
-after its DB/Redis writes land, to every connected /ws/dashboard client via
-backend/app/websockets/manager.py's ConnectionManager singleton.
+WebSocket addendum: every successfully-dispatched event is also published,
+after its DB/Redis writes land, to the Redis pub/sub channel CAMERA_LIVE_CHANNEL
+("camera_live") -- NOT broadcast directly via
+backend/app/websockets/manager.py's ConnectionManager singleton anymore.
+That singleton is process-local: this dispatcher runs inside each camera's
+own OS process (src/run_live.py, one per camera under
+run_all_cameras.py's subprocess-per-camera model -- see
+docs/AI_BACKEND_WIRING.md), a completely different process from the
+`uvicorn app.main:app` process that actually serves /ws/dashboard, so a
+direct ws_manager.broadcast() call here only ever reached this process's
+own, always-empty ConnectionManager (see docs/AI_BACKEND_WIRING.md's
+"Cross-process WebSocket relay" section for the full writeup of this gap
+and its fix). backend/app/services/vision_subscriber.py runs inside the
+API process, subscribes to this same channel, and re-broadcasts every
+message it receives via the real ConnectionManager -- that is what
+actually reaches connected dashboard clients now.
 
 NEW_ALERT addendum: DELAY_ALERT and STAFF_IDLE are the only two event_types
 that can actually create a row in the `alerts` table -- but only DELAY_ALERT
@@ -70,6 +83,7 @@ importing caller's sys.path happens to contain.
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
 from dataclasses import dataclass, field
@@ -99,9 +113,22 @@ from app.models import (  # noqa: E402
     WorkerRole,
     WorkerState,
 )
-from app.websockets.manager import manager as ws_manager  # noqa: E402
 
 logger = logging.getLogger(__name__)
+
+# Redis pub/sub channel this dispatcher publishes every broadcast-worthy
+# event to. Not literally referenced anywhere else in the repo under this
+# exact name yet (docs/ARCHITECTURE.md/EVENT_ENGINE.md describe an
+# aspirational, not-yet-built `events:{camera_id}` per-camera channel
+# scheme for a future, larger event architecture -- see event_engine.py's
+# own docstring on why that doc is aspirational for this task). A single,
+# shared channel (rather than one per camera_id) is used here because the
+# consumer side (backend/app/websockets/manager.py's ConnectionManager) is
+# itself already a single, unfiltered fan-out to every connected dashboard
+# client -- there is no per-camera subscription concept on the WebSocket
+# side to preserve. See docs/AI_BACKEND_WIRING.md's "Cross-process
+# WebSocket relay" section for the full rationale.
+CAMERA_LIVE_CHANNEL = "camera_live"
 
 # Task 10: SystemSetting.worker_idle_limit's own column default
 # (backend/app/models/setting.py) -- used when the table has no row yet
@@ -220,18 +247,17 @@ class EventDispatcher:
                 async with self._db.begin_nested():
                     await self.dispatch_one(event)
                 result.succeeded += 1
-                # WebSocket addendum: broadcast only after this event's
+                # WebSocket addendum: publish only after this event's
                 # writes have actually succeeded (past the SAVEPOINT block
                 # above, past the try's success path) -- never for an event
-                # that ended up in result.failures. A broadcast() to zero
-                # connected clients is a safe no-op (ConnectionManager
-                # simply iterates an empty list). Note: this broadcasts the
-                # *original* event (e.g. plain STAFF_IDLE) -- the extra,
-                # explicit NEW_ALERT signal (see module docstring) is
-                # broadcast separately, from inside the handler itself,
-                # only on the subset of calls that actually created an
-                # Alert row.
-                await ws_manager.broadcast(event)
+                # that ended up in result.failures. Publishing to a channel
+                # with zero subscribers is a safe no-op (Redis PUBLISH just
+                # returns 0). Note: this publishes the *original* event
+                # (e.g. plain STAFF_IDLE) -- the extra, explicit NEW_ALERT
+                # signal (see module docstring) is published separately,
+                # from inside the handler itself, only on the subset of
+                # calls that actually created an Alert row.
+                await self._publish_event(event)
             except Exception as exc:  # noqa: BLE001 - intentional: isolate one bad event from the rest of the batch
                 logger.error(
                     "EventDispatcher failed on event %r: %s", event, exc, exc_info=True
@@ -251,6 +277,17 @@ class EventDispatcher:
             )
         await handler(event)
 
+    # -- WebSocket relay helper ------------------------------------------------
+
+    async def _publish_event(self, event: dict[str, Any]) -> None:
+        """Publish one event dict to CAMERA_LIVE_CHANNEL via this
+        dispatcher's own already-injected redis client -- the same client
+        used for every other Redis write in this class (see __init__), not
+        a separate connection. backend/app/services/vision_subscriber.py
+        (running inside the API process) subscribes to this channel and is
+        the thing that actually calls ConnectionManager.broadcast()."""
+        await self._redis.publish(CAMERA_LIVE_CHANNEL, json.dumps(event))
+
     # -- NEW_ALERT broadcast helper -----------------------------------------
 
     async def _broadcast_new_alert(
@@ -260,15 +297,15 @@ class EventDispatcher:
         alert_type: str,
         message: str,
     ) -> None:
-        """Broadcasts one extra, explicit event the moment an Alert row is
+        """Publishes one extra, explicit event the moment an Alert row is
         actually created -- called from inside a handler, right after the
         corresponding self._db.add(Alert(...)) call, in addition to (not
-        instead of) that handler's own event getting broadcast normally by
+        instead of) that handler's own event getting published normally by
         dispatch(). See module docstring's "NEW_ALERT addendum" for why this
         exists: STAFF_IDLE alone is not a reliable signal that an alert was
         actually created, since most STAFF_IDLE events don't cross the idle
         threshold and don't create one."""
-        await ws_manager.broadcast(
+        await self._publish_event(
             {
                 "event_type": "NEW_ALERT",
                 "camera_id": event.get("camera_id"),

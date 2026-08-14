@@ -1,8 +1,11 @@
+import asyncio
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 # 1. Import unified routes from v1
 from app.api.v1.router import api_router
+from app.services.vision_subscriber import run_vision_subscriber
 from app.websockets.router import router as websocket_router
 
 
@@ -12,6 +15,29 @@ app = FastAPI(
     version="1.0.0",
 )
 app.include_router(websocket_router)
+
+
+# Cross-process WebSocket relay (see docs/AI_BACKEND_WIRING.md's
+# "Cross-process WebSocket relay" section): each camera's EventDispatcher
+# runs in its own separate OS process and can only reach dashboard clients
+# by publishing to Redis -- this background task is the other half, running
+# inside this API process, that subscribes and re-broadcasts over the real,
+# process-local ConnectionManager.
+@app.on_event("startup")
+async def _start_vision_subscriber() -> None:
+    app.state.vision_subscriber_task = asyncio.create_task(run_vision_subscriber())
+
+
+@app.on_event("shutdown")
+async def _stop_vision_subscriber() -> None:
+    task = getattr(app.state, "vision_subscriber_task", None)
+    if task is None:
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
 
 # 2. CORS settings (to allow frontend connection)
 app.add_middleware(

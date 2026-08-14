@@ -3,15 +3,58 @@ import collections.abc
 collections.Mapping = collections.abc.Mapping
 import argparse
 import json
+import logging
+import signal
 import sys
 from pathlib import Path
 
 import cv2
 import numpy as np  # أضفنا numpy لرسم المضلعات
+import redis
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from src.core.live_pipeline import LivePipeline
+from src.events.dispatch_bridge import EventDispatchBridge
+
+# Without this, EventDispatchBridge's INFO/WARNING/ERROR logs (dispatch
+# failures, dropped-frame backpressure warnings, start/stop lifecycle) are
+# silently swallowed by the root logger's default WARNING+-to-nowhere
+# behavior -- this process has no other logging configuration.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    force=True,  # heavy ML imports above (ultralytics/absl/torch) already
+    # attach their own root handlers on import, which makes a plain
+    # basicConfig() a silent no-op -- force=True (3.8+) resets them so
+    # EventDispatchBridge's own INFO/WARNING/ERROR logs are never swallowed.
+)
+
+
+class _GracefulShutdown(Exception):
+    """Raised from the SIGTERM handler so the main loop's normal try/finally
+    (which already flushes the EventDispatchBridge queue on any exception,
+    same as a KeyboardInterrupt/SIGINT) runs before the process exits.
+
+    Note: on Windows, sending SIGTERM (e.g. via Popen.terminate()/taskkill)
+    invokes TerminateProcess() directly at the OS level -- it never reaches
+    this handler, or any other Python code, at all. This handler only takes
+    effect on platforms where SIGTERM is a real, catchable signal (POSIX).
+    See docs/AI_BACKEND_WIRING.md for the verified behavior on this
+    Windows/win32 host.
+    """
+
+
+def _install_signal_handlers() -> None:
+    def _handle_sigterm(signum, frame):
+        raise _GracefulShutdown()
+
+    try:
+        signal.signal(signal.SIGTERM, _handle_sigterm)
+    except (AttributeError, ValueError):
+        # SIGTERM isn't independently catchable on every platform/thread
+        # (e.g. delivered as an unconditional TerminateProcess on Windows).
+        pass
 
 
 def parse_args() -> argparse.Namespace:
@@ -27,6 +70,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--show", action="store_true", help="Show annotated frames in a window")
     parser.add_argument("--start-sec", type=float, default=None, help="Start processing from a specific time in seconds (e.g. 532)")
     parser.add_argument("--save-debug", action="store_true", help="Save crops to disk")
+    parser.add_argument(
+        "--no-event-dispatch",
+        action="store_true",
+        help="Disable the EventEngine/EventDispatcher background bridge (no Postgres/Redis/WebSocket writes)",
+    )
     return parser.parse_args()
 
 
@@ -137,8 +185,40 @@ def draw_custom_table_states(frame: np.ndarray, camera_id: str, pipeline: LivePi
 
 
 def main() -> None:
+    _install_signal_handlers()
+
     args = parse_args()
     pipeline = LivePipeline(config_path=args.config)
+
+    redis_config = pipeline.config.get("redis", {})
+
+    bridge: EventDispatchBridge | None = None
+    if not args.no_event_dispatch:
+        bridge = EventDispatchBridge(
+            config=pipeline.config,
+            redis_host=redis_config.get("host", "localhost"),
+            redis_port=redis_config.get("port", 6379),
+            redis_db=redis_config.get("db", 0),
+        )
+        bridge.start()
+
+    # Separate, plain-synchronous Redis client for publishing the annotated
+    # live-detection frame (see the encode+publish block inside the frame
+    # loop below) -- deliberately NOT the same client/machinery as
+    # EventDispatchBridge:
+    # that bridge exists because EventDispatcher is async and needs a
+    # background event loop to call into from this synchronous loop. This
+    # is just one SET call per frame -- a plain synchronous redis-py client
+    # is the right-sized tool, no bridge/thread needed. socket_timeout
+    # bounds how long a hung Redis connection could ever block this
+    # process's main frame loop.
+    frame_publish_client = redis.Redis(
+        host=redis_config.get("host", "localhost"),
+        port=redis_config.get("port", 6379),
+        db=redis_config.get("db", 0),
+        socket_timeout=2.0,
+        socket_connect_timeout=2.0,
+    )
 
     process_fps = resolve_process_fps(pipeline.config)
 
@@ -195,18 +275,47 @@ def main() -> None:
                 time_seconds=time_seconds,
             )
 
+            if bridge is not None:
+                bridge.submit(event["frame_output"])
+
             try:
                 # 1. رسم المكونات الافتراضية للـ pipeline
                 pipeline.draw_zones(frame, camera_id)
                 pipeline.draw_tracks(frame, event["tracked_objects"])
-                
+
                 # 2. حقن التغيير هنا: تشغيل دالة التلوين المعتمدة على الذاكرة الزمنية المستقرة لحالة الطاولة
                 draw_custom_table_states(frame, camera_id, pipeline)
-                
+
             except Exception as e:
                 import traceback
                 print(f"[ERROR] draw crashed on frame {frame_index}: {e}")
                 traceback.print_exc()
+
+            # Publish the fully-annotated live-detection frame for
+            # backend/app/api/v1/endpoints/video.py's streaming endpoint to
+            # poll. Runs AFTER the draw block above, so `frame` here already
+            # has zone outlines (draw_zones), track boxes (draw_tracks), and
+            # table-state coloring (draw_custom_table_states) drawn into it
+            # in place -- the exact same frame the --show window displays.
+            # No .copy() or second drawing pass needed: cv2.rectangle/
+            # polylines/putText already mutated `frame` directly, so this is
+            # just an encode + publish of what already exists. Published
+            # exactly once per processed frame with no artificial fps
+            # throttling (the pipeline's own real, CPU-bound inference speed
+            # -- see docs/AI_BACKEND_WIRING.md §9 -- is the honest frame
+            # rate). A 5s TTL means the key self-expires if this process
+            # stops or crashes, with no separate "pipeline died" signal
+            # needed. Never allowed to crash the pipeline loop on a Redis
+            # hiccup -- same resilience posture as every other Redis write
+            # in this codebase (CentralIdentityStore, EventDispatchBridge).
+            try:
+                ok, jpeg = cv2.imencode(".jpg", frame)
+                if ok:
+                    frame_publish_client.set(
+                        f"camera:{camera_id}:latest_frame", jpeg.tobytes(), ex=5
+                    )
+            except Exception as e:
+                print(f"[WARNING] failed to publish annotated frame to Redis (frame {frame_index}): {e}")
 
             if crop_dir is not None:
                 for crop_item in event["person_crops"]:
@@ -217,7 +326,7 @@ def main() -> None:
             if args.show:
                 cv2.namedWindow("Restaurant Live Pipeline", cv2.WINDOW_NORMAL)
                 cv2.imshow("Restaurant Live Pipeline", frame)
-                key = cv2.waitKey(1) & 0xFF 
+                key = cv2.waitKey(1) & 0xFF
                 if key != 255:
                     print(f"[DEBUG] key pressed: {key} (chr: {chr(key) if key < 128 else '?'})")
                 if key == ord("q"):
@@ -226,9 +335,16 @@ def main() -> None:
             frame_index += 1
             frames_processed += 1
             print(f"Frame {frames_processed}/{args.max_frames if args.max_frames else '?'} done", flush=True)
+    except _GracefulShutdown:
+        print("[run_live] Received SIGTERM -- shutting down cleanly.")
+    except KeyboardInterrupt:
+        print("[run_live] Received KeyboardInterrupt -- shutting down cleanly.")
     finally:
         capture.release()
         cv2.destroyAllWindows()
+        if bridge is not None:
+            bridge.stop()
+        frame_publish_client.close()
 
 
 if __name__ == "__main__":
