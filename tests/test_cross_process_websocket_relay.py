@@ -202,8 +202,25 @@ async def test_real_event_crosses_from_camera_subprocess_to_api_process(tmp_path
                 stdout=camera_log, stderr=subprocess.STDOUT,
             )
 
-            message = await asyncio.wait_for(ws.recv(), timeout=EVENT_WAIT_TIMEOUT_SECONDS)
-            event = json.loads(message)
+            # run_live.py now also publishes a CAMERA_STREAM_STARTED lifecycle
+            # event to this same channel before the frame loop begins (see
+            # docs/VIDEO_STREAMING.md's "Stream lifecycle events" section) --
+            # that arrives first, ahead of any real detection event. Skip
+            # past it so this test still proves what it always proved: a
+            # real *detection* event, computed inside the camera subprocess,
+            # crosses to a WebSocket client in this separate process.
+            event = None
+            deadline = time.time() + EVENT_WAIT_TIMEOUT_SECONDS
+            while time.time() < deadline:
+                message = await asyncio.wait_for(
+                    ws.recv(), timeout=max(0.1, deadline - time.time())
+                )
+                candidate = json.loads(message)
+                if candidate.get("event_type") == "CAMERA_STREAM_STARTED":
+                    continue
+                event = candidate
+                break
+            assert event is not None, "no detection event received (only lifecycle events?)"
     finally:
         if camera_proc is not None and camera_proc.poll() is None:
             camera_proc.terminate()

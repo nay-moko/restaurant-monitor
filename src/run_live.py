@@ -16,6 +16,7 @@ sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from src.core.live_pipeline import LivePipeline
 from src.events.dispatch_bridge import EventDispatchBridge
+from src.events.event_dispatcher import CAMERA_LIVE_CHANNEL
 
 # Without this, EventDispatchBridge's INFO/WARNING/ERROR logs (dispatch
 # failures, dropped-frame backpressure warnings, start/stop lifecycle) are
@@ -76,6 +77,38 @@ def parse_args() -> argparse.Namespace:
         help="Disable the EventEngine/EventDispatcher background bridge (no Postgres/Redis/WebSocket writes)",
     )
     return parser.parse_args()
+
+
+def publish_stream_lifecycle_event(
+    client: "redis.Redis", camera_id: str, event_type: str
+) -> None:
+    """Publishes a CAMERA_STREAM_STARTED/CAMERA_STREAM_STOPPED envelope to
+    CAMERA_LIVE_CHANNEL via the existing synchronous frame_publish_client --
+    same channel, same envelope shape (event_type/camera_id/time_seconds/
+    track_id/global_id/zone_id/details) as every event EventDispatcher
+    publishes there, so vision_subscriber.py's generic, event_type-agnostic
+    re-broadcast (backend/app/services/vision_subscriber.py) needs no
+    changes to relay these two lifecycle events to dashboard clients same
+    as any other. Never allowed to crash the pipeline on a Redis hiccup --
+    same resilience posture as the frame-publish block below.
+    """
+    try:
+        client.publish(
+            CAMERA_LIVE_CHANNEL,
+            json.dumps(
+                {
+                    "event_type": event_type,
+                    "camera_id": camera_id,
+                    "time_seconds": 0.0,
+                    "track_id": None,
+                    "global_id": None,
+                    "zone_id": None,
+                    "details": {},
+                }
+            ),
+        )
+    except Exception as e:
+        print(f"[WARNING] failed to publish {event_type} to Redis: {e}")
 
 
 def open_capture(source: str) -> cv2.VideoCapture:
@@ -229,6 +262,13 @@ def main() -> None:
     if args.first_video:
         source, camera_id, video_id = load_first_video_path(args.videos_index)
 
+    # Both frame_publish_client and bridge (if enabled) are constructed and
+    # ready by this point, and camera_id is now fully resolved (including
+    # the --first-video override above) -- published before the frame loop
+    # begins so a WebSocket client always sees this before any detection
+    # event for this camera_id.
+    publish_stream_lifecycle_event(frame_publish_client, camera_id, "CAMERA_STREAM_STARTED")
+
     capture = open_capture(source)
 
     if not capture.isOpened():
@@ -344,6 +384,13 @@ def main() -> None:
         cv2.destroyAllWindows()
         if bridge is not None:
             bridge.stop()
+        # Mirror of the CAMERA_STREAM_STARTED publish above -- only reached
+        # on a clean exit (normal EOF/--max-frames, SIGINT, or a caught
+        # SIGTERM -- see _GracefulShutdown above); a hard kill (SIGKILL, or
+        # SIGTERM on Windows, which bypasses Python entirely) never reaches
+        # this finally: block at all, same already-documented limitation as
+        # EventDispatchBridge.stop()'s own queue-flush guarantee.
+        publish_stream_lifecycle_event(frame_publish_client, camera_id, "CAMERA_STREAM_STOPPED")
         frame_publish_client.close()
 
 

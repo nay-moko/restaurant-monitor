@@ -294,3 +294,158 @@ Result: **9 failed, 88 passed** — identical to the pre-existing baseline
   `Content-Type`/`Content-Length` per-part framing for consistency
   between the two modes, even though `Content-Length` is technically
   redundant with the multipart boundary itself.
+
+## 7. Stream lifecycle events
+
+`GET /api/v1/video/{camera_id}/stream` (§2 above) only tells a frontend
+"annotated vs. raw" **at the moment it connects** — it does not push any
+signal when a camera's live-detection pipeline actually starts or stops
+mid-session. Previously the only way to notice a pipeline start/stop was
+to reconnect and re-check `X-Stream-Source`. This section adds two
+explicit WebSocket events for that instead.
+
+### 7a. Event types and shape
+
+`src/run_live.py` now publishes two lifecycle events to the same Redis
+pub/sub channel `src/events/event_dispatcher.py` already publishes every
+other event to — `CAMERA_LIVE_CHANNEL` (`"camera_live"`), imported from
+that module (`from src.events.event_dispatcher import CAMERA_LIVE_CHANNEL`),
+not a new or hardcoded channel name:
+
+| Event | When |
+|---|---|
+| `CAMERA_STREAM_STARTED` | Right after `frame_publish_client` (the synchronous Redis client) and `EventDispatchBridge` are both constructed and ready, once `camera_id` is fully resolved (including the `--first-video` override) — before the frame loop begins. |
+| `CAMERA_STREAM_STOPPED` | In the existing `finally:` block, right before `frame_publish_client.close()` — i.e. only on a path that actually reaches cleanup. |
+
+Both use the exact same envelope shape as every other event on this
+channel (`event_type`/`camera_id`/`time_seconds`/`track_id`/`global_id`/
+`zone_id`/`details`), so no frontend special-casing is needed:
+
+```json
+{
+  "event_type": "CAMERA_STREAM_STARTED",
+  "camera_id": "camera_01",
+  "time_seconds": 0.0,
+  "track_id": null,
+  "global_id": null,
+  "zone_id": null,
+  "details": {}
+}
+```
+
+(`CAMERA_STREAM_STOPPED` is identical except for `event_type`.) Both are
+published via the existing `frame_publish_client` — the same synchronous
+`redis.Redis` client already constructed for the annotated-frame `SET`
+calls (§3) — not a second Redis connection. Each publish is wrapped in
+its own `try/except` (mirroring the existing frame-publish resilience
+posture in the same file): a Redis hiccup logs a warning and never
+crashes the pipeline or blocks cleanup.
+
+### 7b. `vision_subscriber.py` needed zero changes
+
+`backend/app/services/vision_subscriber.py` subscribes to
+`CAMERA_LIVE_CHANNEL` and re-broadcasts **every** message it receives via
+`ws_manager.broadcast(json.loads(message["data"]))`, with no filtering or
+branching on `event_type` (see §11 of `docs/AI_BACKEND_WIRING.md`). Since
+`CAMERA_STREAM_STARTED`/`CAMERA_STREAM_STOPPED` are published to that same
+channel in that same envelope shape, they are relayed to every connected
+`/ws/dashboard` client automatically, identically to `ZONE_OCCUPANCY_CHANGE`,
+`NEW_ALERT`, etc. This file was not modified for this task.
+
+### 7c. Real verification (this session, 2026-08-15)
+
+Reused the same real multi-process pattern as
+`tests/test_cross_process_websocket_relay.py` /
+`docs/AI_BACKEND_WIRING.md` §11: a real `python -m uvicorn app.main:app`
+subprocess (running the real, unmodified `vision_subscriber` background
+task), a real `python src/run_live.py` subprocess against
+`data/raw_videos/camera_01/video_001.mp4`, and a real WebSocket client
+(the `websockets` package, real TCP loopback socket) in a third, separate
+process — connected to the `uvicorn` process **before** the camera
+subprocess was started.
+
+**Scenario A — normal exit (`--max-frames 20`):**
+
+```
+=== SCENARIO A: normal exit -- expect STARTED then STOPPED ===
+Total events received: 8
+First event type: CAMERA_STREAM_STARTED
+Saw CAMERA_STREAM_STARTED: True
+Saw CAMERA_STREAM_STOPPED: True
+Full first event: {'event_type': 'CAMERA_STREAM_STARTED', 'camera_id': 'camera_01', 'time_seconds': 0.0, 'track_id': None, 'global_id': None, 'zone_id': None, 'details': {}}
+Full last event: {'event_type': 'CAMERA_STREAM_STOPPED', 'camera_id': 'camera_01', 'time_seconds': 0.0, 'track_id': None, 'global_id': None, 'zone_id': None, 'details': {}}
+SCENARIO A: PASSED
+```
+
+`CAMERA_STREAM_STARTED` was the very first message the WebSocket client
+received — ahead of every real detection event from that run — and
+`CAMERA_STREAM_STOPPED` arrived after the `run_live.py` subprocess exited
+normally (frame limit reached, clean `finally:` path).
+
+**Scenario B — hard kill (`Popen.kill()`, i.e. SIGKILL / Windows
+`TerminateProcess`), confirming the already-documented limitation rather
+than fixing it:**
+
+```
+=== SCENARIO B: hard kill -- expect STARTED but NOT STOPPED ===
+Received CAMERA_STREAM_STARTED: {'event_type': 'CAMERA_STREAM_STARTED', 'camera_id': 'camera_01', ...}
+Hard-killing run_live.py subprocess (pid=3628)...
+Subprocess exit code after kill: 1
+Unexpected extra message after kill: {'event_type': 'ZONE_OCCUPANCY_CHANGE', 'camera_id': 'camera_01', ...}
+Saw CAMERA_STREAM_STOPPED after hard kill: False
+SCENARIO B: PASSED (confirms documented limitation: no STOPPED on hard kill)
+```
+
+`CAMERA_STREAM_STARTED` still arrived (published before the frame loop
+starts), but no `CAMERA_STREAM_STOPPED` arrived after the hard kill — a
+queued detection event already in flight was the last thing received,
+then nothing. This is the same, already-documented limitation as
+`EventDispatchBridge.stop()`'s queue-flush guarantee and the
+`_GracefulShutdown`/SIGTERM handling in `run_live.py` itself: a hard kill
+(SIGKILL, or SIGTERM on Windows, which the OS delivers as an
+unconditional `TerminateProcess` bypassing all Python code) never reaches
+the `finally:` block, so `CAMERA_STREAM_STOPPED` is never published. Not
+something this task attempts to solve — a frontend still needs its
+existing reconnect-and-check fallback (§2) as a backstop for this case;
+these two events are a faster, additive signal for the clean-shutdown
+path, not a guarantee for every possible process death.
+
+No orphaned `uvicorn`/`run_live` processes remained after the verification
+script exited (confirmed via `Get-CimInstance Win32_Process`, same
+technique as `docs/AI_BACKEND_WIRING.md` §11).
+
+### 7d. Full test suite
+
+```
+python -m pytest -q
+```
+
+Result: **9 failed, 88 passed** — identical to the documented baseline in
+`docs/AI_BACKEND_WIRING.md` §11 (same 9 pre-existing, unrelated failures:
+`test_live_pipeline_timing.py` ×3, `test_pipeline_output.py` ×1,
+`test_pose_stride.py` ×1, `test_table_zone_anchoring.py` ×3,
+`test_tracker.py` ×1 — stale test signatures against pipeline internals,
+none touching `run_live.py`, `event_dispatcher.py`, or `vision_subscriber.py`).
+
+One test needed a small, deliberate update:
+`tests/test_cross_process_websocket_relay.py` opens its WebSocket
+connection before starting the camera subprocess and previously asserted
+the *first* message received was a detection event. Since
+`CAMERA_STREAM_STARTED` is now published before the frame loop begins, it
+arrives first instead. The test now skips past `CAMERA_STREAM_STARTED`
+messages and asserts on the first real detection event after it —
+preserving what the test always proved (a detection event computed inside
+the camera subprocess reaches a WebSocket client in a separate process)
+without asserting away the new, expected lifecycle event.
+
+### 7e. Files changed
+
+| File | Change |
+|---|---|
+| `src/run_live.py` | Imports `CAMERA_LIVE_CHANNEL` from `src.events.event_dispatcher`; adds `publish_stream_lifecycle_event()` helper; publishes `CAMERA_STREAM_STARTED` once `camera_id`/`frame_publish_client`/`bridge` are all ready (before the frame loop), and `CAMERA_STREAM_STOPPED` in the existing `finally:` block before `frame_publish_client.close()`. No second Redis connection opened. |
+| `tests/test_cross_process_websocket_relay.py` | Updated to skip past `CAMERA_STREAM_STARTED` when waiting for the first detection event (see §7d). |
+
+`backend/app/websockets/`, `src/events/event_engine.py`, and
+`src/events/dispatch_bridge.py` were not touched, per this task's
+constraint. `backend/app/services/vision_subscriber.py` was not touched
+either — it needed zero changes (§7b).
