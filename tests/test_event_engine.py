@@ -100,13 +100,30 @@ def test_engine_event_to_dict_uses_dataclasses_asdict():
 # First sighting -> no event (applies across all rules)
 # ---------------------------------------------------------------------------
 
+# def test_first_sighting_generates_no_event():
+#     engine = EventEngine()
+#     frame = make_frame("cam1", 0, 0.0, [
+#         make_track(1, role="customer", zone_id="t1", zone_type="table"),
+#         make_track(2, role="worker", zone_id="staff", zone_type="staff"),
+#     ])
+#     assert engine.process_frame(frame) == []
 def test_first_sighting_generates_no_event():
+    """First sighting emits no events for non-worker tracks. Worker tracks
+    are the one deliberate exception -- they get an immediate WORKER_ACTIVE
+    (see event_engine.py's first-sighting branch) so a worker who's active
+    from frame one still gets a Redis key right away, instead of staying
+    invisible to /workers/status until their first real idle->active
+    transition."""
     engine = EventEngine()
     frame = make_frame("cam1", 0, 0.0, [
         make_track(1, role="customer", zone_id="t1", zone_type="table"),
         make_track(2, role="worker", zone_id="staff", zone_type="staff"),
     ])
-    assert engine.process_frame(frame) == []
+    events = engine.process_frame(frame)
+    assert len(events) == 1
+    assert events[0]["event_type"] == "WORKER_ACTIVE"
+    assert events[0]["track_id"] == 2
+    assert events[0]["details"]["reason"] == "first_sighting"
 
 
 def test_multi_camera_same_numeric_track_id_is_independent_first_sighting():
@@ -205,8 +222,8 @@ def test_customer_left_does_not_fire_for_a_track_never_seated():
 
 def test_staff_idle_fires_exactly_once_at_threshold():
     engine = EventEngine(config={"events": {"staff_idle_threshold_frames": 3}})
-    track = lambda: make_track(1, role="worker", zone_id="staff", zone_type="staff")
-
+    # track = lambda: make_track(1, role="worker", zone_id="staff", zone_type="staff")
+    track = lambda: make_track(1, role="worker", zone_id="staff", zone_type="staff", action="standing")
     engine.process_frame(make_frame("cam1", 0, 0.0, [track()]))  # first sighting
 
     e1 = engine.process_frame(make_frame("cam1", 1, 1.0, [track()]))  # idle_counter=1
@@ -230,9 +247,9 @@ def test_staff_idle_fires_exactly_once_at_threshold():
 
 def test_worker_active_fires_when_idle_worker_changes_zone():
     engine = EventEngine(config={"events": {"staff_idle_threshold_frames": 2}})
-    engine.process_frame(make_frame("cam1", 0, 0.0, [make_track(1, role="worker", zone_id="staff", zone_type="staff")]))
-    engine.process_frame(make_frame("cam1", 1, 1.0, [make_track(1, role="worker", zone_id="staff", zone_type="staff")]))
-    e2 = engine.process_frame(make_frame("cam1", 2, 2.0, [make_track(1, role="worker", zone_id="staff", zone_type="staff")]))
+    engine.process_frame(make_frame("cam1", 0, 0.0, [make_track(1, role="worker", zone_id="staff", zone_type="staff", action="standing")]))
+    engine.process_frame(make_frame("cam1", 1, 1.0, [make_track(1, role="worker", zone_id="staff", zone_type="staff", action="standing")]))
+    e2 = engine.process_frame(make_frame("cam1", 2, 2.0, [make_track(1, role="worker", zone_id="staff", zone_type="staff", action="standing")]))
     assert "STAFF_IDLE" in types_of(e2)  # confirm idle was actually reached first
 
     e3 = engine.process_frame(make_frame("cam1", 3, 12.0, [make_track(1, role="worker", zone_id="kitchen", zone_type="staff")]))
@@ -250,8 +267,8 @@ def test_worker_active_fires_when_idle_worker_changes_zone():
 
 def test_worker_active_does_not_fire_if_never_reached_idle_threshold():
     engine = EventEngine(config={"events": {"staff_idle_threshold_frames": 300}})
-    engine.process_frame(make_frame("cam1", 0, 0.0, [make_track(1, role="worker", zone_id="staff", zone_type="staff")]))
-    engine.process_frame(make_frame("cam1", 1, 1.0, [make_track(1, role="worker", zone_id="staff", zone_type="staff")]))
+    engine.process_frame(make_frame("cam1", 0, 0.0, [make_track(1, role="worker", zone_id="staff", zone_type="staff", action="standing")]))
+    engine.process_frame(make_frame("cam1", 1, 1.0, [make_track(1, role="worker", zone_id="staff", zone_type="staff", action="standing")]))
     events = engine.process_frame(make_frame("cam1", 2, 2.0, [make_track(1, role="worker", zone_id="kitchen", zone_type="staff")]))
     assert "WORKER_ACTIVE" not in types_of(events)
 

@@ -82,7 +82,7 @@ class EventEngine:
     # ZONE_TRANSITION events for the *same* track, per the task's explicit
     # "at least 2 real seconds" rule text.
     DEFAULT_ZONE_TRANSITION_MIN_INTERVAL_SECONDS = 2.0
-
+    STATIC_ACTIONS = {"sitting", "standing"}
     def __init__(self, config: dict | None = None):
         events_config = (config or {}).get("events", {})
         self.staff_idle_threshold_frames: int = events_config.get(
@@ -164,9 +164,25 @@ class EventEngine:
             key = f"{camera_id}:{track.track_id}"
             prev = self._track_states.get(key)
 
-            # -- First sighting: store state, emit nothing (per spec). ------
+            # # -- First sighting: store state, emit nothing (per spec). ------
+            # if prev is None:
+            #     self._track_states[key] = self._new_track_state(track, now)
+            #     continue
+            
+            # -- First sighting: store state. Workers additionally get an
+            # immediate WORKER_ACTIVE (same event/dispatch path STAFF_IDLE's
+            # transition already uses) so a worker who's active from the
+            # very first frame gets a Redis key right away, instead of
+            # staying absent from /workers/status until their first real
+            # idle->active transition (which may never happen).
             if prev is None:
                 self._track_states[key] = self._new_track_state(track, now)
+                if track.role == "worker":
+                    events.append(EngineEvent(
+                        event_type="WORKER_ACTIVE", camera_id=camera_id, time_seconds=now,
+                        track_id=track.track_id, global_id=track.global_id, zone_id=track.zone_id,
+                        details={"idle_frames": 0, "idle_duration_seconds": 0.0, "reason": "first_sighting"},
+                    ))
                 continue
 
             zone_changed = track.zone_id != prev["zone_id"]
@@ -196,9 +212,40 @@ class EventEngine:
                 ))
                 prev["seated_since"] = None
 
+            # # -- Rules 3/4: STAFF_IDLE / WORKER_ACTIVE ----------------------
+            # if track.role == "worker":
+            #     if zone_changed:
+            #         if prev["is_idle"]:
+            #             idle_duration_s = now - prev["zone_entered_time"]
+            #             events.append(EngineEvent(
+            #                 event_type="WORKER_ACTIVE", camera_id=camera_id, time_seconds=now,
+            #                 track_id=track.track_id, global_id=track.global_id, zone_id=track.zone_id,
+            #                 details={
+            #                     "idle_frames": prev["idle_counter"],
+            #                     "idle_duration_seconds": idle_duration_s,
+            #                 },
+            #             ))
+            #             prev["is_idle"] = False
+            #         prev["idle_counter"] = 0
+            #         prev["zone_entered_time"] = now
+            #     else:
+            #         prev["idle_counter"] += 1
+            #         if prev["idle_counter"] == self.staff_idle_threshold_frames and not prev["is_idle"]:
+            #             prev["is_idle"] = True
+            #             idle_duration_s = now - prev["zone_entered_time"]
+            #             events.append(EngineEvent(
+            #                 event_type="STAFF_IDLE", camera_id=camera_id, time_seconds=now,
+            #                 track_id=track.track_id, global_id=track.global_id, zone_id=track.zone_id,
+            #                 details={
+            #                     "idle_frames": prev["idle_counter"],
+            #                     "idle_duration_seconds": idle_duration_s,
+            #                     "threshold_frames": self.staff_idle_threshold_frames,
+            #                 },
+            #             ))
             # -- Rules 3/4: STAFF_IDLE / WORKER_ACTIVE ----------------------
             if track.role == "worker":
-                if zone_changed:
+                is_static_pose = track.action in self.STATIC_ACTIONS
+                if zone_changed or not is_static_pose:
                     if prev["is_idle"]:
                         idle_duration_s = now - prev["zone_entered_time"]
                         events.append(EngineEvent(
