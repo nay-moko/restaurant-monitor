@@ -69,6 +69,16 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# allowlist صريح لأي كاميرا مسموح تفتح stream (خام أو annotated) أساسًا --
+# بدون ما تكون هون، الطلب بيرجع 403 حتى لو camera_id عندها فيديو مسجّل صالح
+# بـ videos_index.json. تُقرأ من settings.STREAMING_ENABLED_CAMERAS (متغيّر
+# STREAMING_ENABLED_CAMERAS بملف .env بجذر المشروع -- راجع
+# backend/app/core/config.py)، قائمة مفصولة بفواصل. لو فاضية، ولا كاميرا
+# مسموحة -- افتراضي آمن، منيح لتجربة "6 كاميرات خام بس" قبل ما تضيف AI عليهم.
+STREAMING_ENABLED_CAMERAS: set[str] = {
+    c.strip() for c in settings.STREAMING_ENABLED_CAMERAS.split(",") if c.strip()
+}
+
 # 10-15 fps is "reasonable" per the task; 12 splits the difference and
 # keeps CPU-only JPEG re-encoding comfortably ahead of the frame budget.
 # Applies only to the raw-file fallback generator -- the annotated
@@ -137,7 +147,12 @@ async def _mjpeg_frame_generator(video_path: Path, request: Request):
                 )
                 break
 
-            ret, frame = cap.read()
+            # cap.read() بلوكينغ (I/O + decode) -- تشغيله بـ asyncio.to_thread
+            # بدل استدعائه مباشرة بالـ coroutine، حتى ما يوقف event loop
+            # الـ FastAPI الوحيد لحظة الاستدعاء. مع عدة كاميرات خام سوا بنفس
+            # الـ process، بدون هيك كل الطلبات التانية (حتى غير المتعلقة
+            # بالفيديو) بتتجمد لحد ما ينتهي القراءة/فك التشفير.
+            ret, frame = await asyncio.to_thread(cap.read)
             if not ret:
                 # End of file -- loop back to the start for continuous
                 # playback rather than ending the HTTP response.
@@ -148,7 +163,7 @@ async def _mjpeg_frame_generator(video_path: Path, request: Request):
                     break
                 continue
 
-            ok, jpeg = cv2.imencode(".jpg", frame)
+            ok, jpeg = await asyncio.to_thread(cv2.imencode, ".jpg", frame)
             if not ok:
                 continue
 
@@ -249,6 +264,16 @@ async def stream_video(
     is_valid = await _authenticate_websocket(token, db)
     if not is_valid:
         raise HTTPException(status_code=401, detail="Invalid or missing token")
+
+    # -- التحكم بمين مسموح يبث أساسًا (خام أو annotated)، مستقل عن مين
+    # مطبّق عليه AI (MULTI_CAMERA_IDS بـ main.py). لازم camera_id يكون
+    # بـ STREAMING_ENABLED_CAMERAS (env var) وإلا 403 -- هيك تقدر تجرب
+    # بث خام لـ 6 كاميرات بس بدون ما الباقي (الـ 15) يفتحوا streams لحالهم.
+    if camera_id not in STREAMING_ENABLED_CAMERAS:
+        raise HTTPException(
+            status_code=403,
+            detail=f"camera_id={camera_id!r} غير مفعّل للبث -- أضفه لـ STREAMING_ENABLED_CAMERAS",
+        )
 
     latest_annotated_frame = await _frame_redis_client.get(_latest_frame_key(camera_id))
     if latest_annotated_frame is not None:

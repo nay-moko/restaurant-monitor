@@ -41,6 +41,18 @@ class Settings(BaseSettings):
     OTP_EXPIRE_MINUTES: int = 10
     DEV_MODE: bool = False  # Set to true for development bypass
 
+    # -- Camera streaming/AI control (راجع docs/OPEN_DECISIONS_v4.md) --
+    # AI_ENABLED_CAMERAS: الكاميرات اللي بيشتغل عليها run_live.py الكامل
+    # (detection + tracking + KBS)، تُقرأ بـ backend/app/main.py.
+    # قيمة نصية بفواصل، مثلاً: "camera_01,camera_02,camera_04"
+    AI_ENABLED_CAMERAS: str = "camera_01"
+
+    # STREAMING_ENABLED_CAMERAS: الكاميرات المسموح تفتح /video/{id}/stream
+    # أساسًا (خام أو annotated)، تُقرأ بـ
+    # backend/app/api/v1/endpoints/video.py. فاضية افتراضيًا = ولا كاميرا
+    # مسموحة، لازم تحددها صراحة بـ .env.
+    STREAMING_ENABLED_CAMERAS: str = ""
+
     model_config = SettingsConfigDict(
         env_file=Path(__file__).parent.parent.parent.parent / ".env",
         env_file_encoding="utf-8",

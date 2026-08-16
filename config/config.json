@@ -8,6 +8,7 @@
         "device": "cuda"
     },
     "detector": {
+        "mode": "remote",
         "model": "models/yolo/yolov8n-pose.pt",
         "conf_threshold": 0.25,
         "imgsz": 640,

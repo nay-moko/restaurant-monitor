@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 # 1. Import unified routes from v1
 from app.api.v1.router import api_router
+from app.core.config import settings
 from app.services.vision_subscriber import run_vision_subscriber
 from app.websockets.router import router as websocket_router
 
@@ -21,7 +22,12 @@ import time as _time
 
 from src.run_all_cameras import CameraOrchestrator
 
-MULTI_CAMERA_IDS = ["camera_01"]
+# الكاميرات اللي بيطبّق عليها الـ AI pipeline (run_live.py كامل: detection +
+# tracking + KBS). تُقرأ من settings.AI_ENABLED_CAMERAS (متغيّر AI_ENABLED_CAMERAS
+# بملف .env بجذر المشروع -- راجع backend/app/core/config.py)، قائمة مفصولة
+# بفواصل مثلاً "camera_01,camera_02,camera_04,camera_05,camera_06,camera_07"
+# بدل قيمة ثابتة بالكود -- هيك تقدر تبدّل عدد/هوية الكاميرات بدون ما تلمس main.py.
+MULTI_CAMERA_IDS = [c.strip() for c in settings.AI_ENABLED_CAMERAS.split(",") if c.strip()]
 _ROOT_VENV_PYTHON = _PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
 
 CAMERA_RESTART_POLL_INTERVAL_SECONDS = 3.0

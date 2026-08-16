@@ -54,7 +54,7 @@ class LivePipeline:
         "worker":   (  0, 140, 255),  # orange (BGR)
     }
 
-    def __init__(self, config_path: str = "config/config.json"):
+    def __init__(self, config_path: str = "config/config.json", camera_id: str | None = None):
         self.project_dir = Path.cwd()
         self.config_path = self.project_dir / config_path
 
@@ -65,15 +65,36 @@ class LivePipeline:
             self.config = json.load(f)
 
         # -- Detector -------------------------------------------------------
+        # detector.mode بـ config.json: "local" (افتراضي، القديم -- كل كاميرا
+        # تحمّل YOLO لحالها وتفتح CUDA context خاص فيها) أو "remote" (الجديد
+        # -- تبعت الفريمات لـ src/inference/inference_service.py عبر Redis
+        # وتاخد الرد، بدون ما تفتح CUDA context إطلاقًا بهاي العملية).
         detector_config = self.config["detector"]
-        self.detector = PersonDetector(
-            model_name=detector_config.get("model"),
-            conf_threshold=detector_config.get("conf_threshold"),
-            imgsz=detector_config.get("imgsz"),
-            min_box_width=detector_config.get("min_box_width"),
-            min_box_height=detector_config.get("min_box_height"),
-            device=detector_config.get("device"),
-        )
+        detector_mode = detector_config.get("mode", "local")
+
+        if detector_mode == "remote":
+            if camera_id is None:
+                raise ValueError("detector.mode='remote' يحتاج camera_id عند إنشاء LivePipeline")
+            from src.ai_models.remote_detector import RemoteDetector
+            redis_config = self.config.get("redis", {})
+            self.detector = RemoteDetector(
+                camera_id=camera_id,
+                redis_host=redis_config.get("host", "localhost"),
+                redis_port=redis_config.get("port", 6379),
+                redis_db=redis_config.get("db", 0),
+                min_box_width=detector_config.get("min_box_width"),
+                min_box_height=detector_config.get("min_box_height"),
+            )
+        else:
+            self.detector = PersonDetector(
+                model_name=detector_config.get("model"),
+                conf_threshold=detector_config.get("conf_threshold"),
+                imgsz=detector_config.get("imgsz"),
+                min_box_width=detector_config.get("min_box_width"),
+                min_box_height=detector_config.get("min_box_height"),
+                device=detector_config.get("device"),
+            )
+
 
         # -- Tracker --------------------------------------------------------
         tracker_config = self.config.get("tracker", {})
