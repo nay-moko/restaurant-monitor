@@ -22,6 +22,7 @@ class RestaurantTracker:
             nms_max_overlap=self.nms_max_overlap,
             embedder="mobilenet",
             half=True,
+            embedder_gpu=False, 
             max_cosine_distance=0.4
         )
 

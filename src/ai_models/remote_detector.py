@@ -20,8 +20,9 @@ import redis
 
 from src.inference.inference_service import REQUEST_QUEUE_KEY, RESULT_CHANNEL_PREFIX
 
-RESULT_TIMEOUT_SECONDS = 2.0
-
+RESULT_TIMEOUT_SECONDS = 1.5
+INFER_MAX_SIDE = 640   # لازم يساوي detector.imgsz بالكونفيغ
+JPEG_QUALITY = 80
 
 class RemoteDetector:
     def __init__(
@@ -41,34 +42,65 @@ class RemoteDetector:
         self.pubsub = self.redis.pubsub()
         self.pubsub.subscribe(f"{RESULT_CHANNEL_PREFIX}{camera_id}")
 
+
+
     def detect_with_pose(self, frame: np.ndarray) -> tuple[list[dict], list[Any] | None]:
-        frame_index = int(uuid.uuid4().int % 10_000_000)  # معرّف فريد كافي لمطابقة الرد
-        ok, jpeg = cv2.imencode(".jpg", frame)
+        frame_index = int(uuid.uuid4().int % 10_000_000)
+
+        # -- تصغير قبل الترميز: الموديل أصلًا بيصغّر لـ imgsz، فما في أي خسارة دقة --
+        h, w = frame.shape[:2]
+        scale = min(1.0, INFER_MAX_SIDE / float(max(h, w)))
+        if scale < 1.0:
+            small = cv2.resize(
+                frame, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA
+            )
+        else:
+            small = frame
+
+        ok, jpeg = cv2.imencode(".jpg", small, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
         if not ok:
             return [], []
 
-        header = json.dumps({"camera_id": self.camera_id, "frame_index": frame_index}).encode()
+        header = json.dumps(
+            {
+                "camera_id": self.camera_id,
+                "frame_index": frame_index,
+                "ts": time.time(),  # حتى السيرفس يقدر يرمي الطلبات القديمة
+            }
+        ).encode()
         payload = len(header).to_bytes(4, "big") + header + jpeg.tobytes()
         self.redis.rpush(REQUEST_QUEUE_KEY, payload)
 
+        inv = 1.0 / scale if scale > 0 else 1.0
         deadline = time.monotonic() + RESULT_TIMEOUT_SECONDS
+
         while time.monotonic() < deadline:
             msg = self.pubsub.get_message(timeout=0.1)
             if msg is None or msg["type"] != "message":
                 continue
             data = json.loads(msg["data"])
             if data["frame_index"] != frame_index:
-                continue  # رد لفريم قديم متأخر -- تجاهله وكمّل الانتظار
+                continue
 
             detections = []
-            for det in data["detections"]:
-                x1, y1, x2, y2 = det["box"]
+            keypoints = []
+            raw_kpts = data.get("keypoints") or []
+
+            for i, det in enumerate(data["detections"]):
+                # -- إرجاع الإحداثيات لمقياس الفريم الأصلي --
+                x1, y1, x2, y2 = [int(round(v * inv)) for v in det["box"]]
                 if (x2 - x1) < self.min_box_width or (y2 - y1) < self.min_box_height:
                     continue
+                det = dict(det)
+                det["box"] = [x1, y1, x2, y2]
                 detections.append(det)
-            return detections, data["keypoints"]
 
-        # ما وصل رد بالوقت المحدد (الـ inference service واقف أو مزحوم) --
-        # نرجع قائمة فاضية بدل ما نعلّق البايبلاين كامل.
-        print(f"[RemoteDetector] timeout بانتظار رد الـ inference service (camera={self.camera_id})")
+                kp = raw_kpts[i] if i < len(raw_kpts) else None
+                if kp is not None:
+                    kp = [[p[0] * inv, p[1] * inv] + list(p[2:]) for p in kp]
+                keypoints.append(kp)
+
+            return detections, keypoints
+
+        print(f"[RemoteDetector] timeout (camera={self.camera_id})", flush=True)
         return [], []

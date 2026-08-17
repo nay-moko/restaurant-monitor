@@ -4,7 +4,7 @@
         "version": "2.0-live"
     },
     "pipeline": {
-        "process_fps": 2,
+        "process_fps": 5,
         "device": "cuda"
     },
     "detector": {

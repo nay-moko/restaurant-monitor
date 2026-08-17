@@ -22,28 +22,14 @@ from src.events.event_dispatcher import CAMERA_LIVE_CHANNEL
 # failures, dropped-frame backpressure warnings, start/stop lifecycle) are
 # silently swallowed by the root logger's default WARNING+-to-nowhere
 # behavior -- this process has no other logging configuration.
-#
-# root level هون هلق WARNING (مش INFO) عمدًا -- رفع root لـ INFO كان عم
-# يفعّل تلقائيًا كل logger داخلي بأي مكتبة (خصوصًا experta.watchers.FACTS/
-# MATCH بـ RoleEngine) يطبع سطر لكل تطابق قاعدة/تغيير حقيقة، أي عشرات
-# الأسطر لكل فريم -- وهاد اللي كان عم يضخّم ملفات logs/camera_XX.log
-# لحجم جنوني بسرعة (ويعلّق VS Code لما يكون فاتح عليها متابعة تلقائية).
 logging.basicConfig(
-    level=logging.WARNING,
+    level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     force=True,  # heavy ML imports above (ultralytics/absl/torch) already
     # attach their own root handlers on import, which makes a plain
     # basicConfig() a silent no-op -- force=True (3.8+) resets them so
-    # our own logger's INFO/WARNING/ERROR logs are never swallowed.
+    # EventDispatchBridge's own INFO/WARNING/ERROR logs are never swallowed.
 )
-
-# رفع مستوى لوجرز مشروعنا فقط (لا غيرها) لـ INFO -- هاد النطاق الصح
-# بدل رفع root logger كامل. أضف أي logger تاني من مشروعك هون لو احتجته.
-logging.getLogger("src.events.dispatch_bridge").setLevel(logging.INFO)
-
-# صمّت صراحة أي watcher دبجنغ داخلي بمكتبة experta (RoleEngine) بغض النظر
-# عن مستوى root -- طبقة حماية إضافية حتى لو حدا رفع root لـ INFO لاحقًا.
-logging.getLogger("experta.watchers").setLevel(logging.WARNING)
 
 
 class _GracefulShutdown(Exception):
@@ -235,11 +221,7 @@ def main() -> None:
     _install_signal_handlers()
 
     args = parse_args()
-    # ملاحظة: بحالة --first-video (تجربة نادرة، run_all_cameras.py دايمًا
-    # يبعت --camera-id صراحة) قد يتغيّر camera_id لاحقًا بالكود تحت --
-    # detector.mode='remote' يفترض camera_id ثابت من البداية، فإذا استخدمت
-    # --first-video مع remote mode لازم تعدّل الترتيب أو تمرر camera_id يدويًا.
-    pipeline = LivePipeline(config_path=args.config, camera_id=args.camera_id)
+    pipeline = LivePipeline(config_path=args.config)
 
     redis_config = pipeline.config.get("redis", {})
 
@@ -295,13 +277,12 @@ def main() -> None:
     fps = capture.get(cv2.CAP_PROP_FPS)
     pipeline.set_frame_rate(fps)
 
-    # يتم اشتقاق frame_stride من الـ fps الفعلي للفيديو ومعدل المعالجة المطلوب (process_fps)
-    # في config.json. هاد الـ stride يُستخدم الآن لتخطي استدعاء الـ detector نفسه
-    # (YOLO على GPU) وليس فقط الـ pose/KBS -- وإلا process_fps بيبقى بدون أي تأثير
-    # فعلي، وبيصير الـ GPU يعالج كل فريم من الفيديو (مثلاً 25fps) بدل الـ 2fps
-    # المطلوبة في config.json، أي حمل أكبر بحوالي 12x من المقصود.
-    frame_stride = compute_pose_stride(fps, process_fps)
-    pose_stride = frame_stride
+    # يتم اشتقاق pose_stride من الـ fps الفعلي للفيديو ومعدل المعالجة المطلوب (process_fps)
+    # في config.json، بدل قيمة ثابتة، حتى نستهدف نفس معدل المعالجة بغض النظر عن fps الكاميرا الأصلي
+    pose_stride = compute_pose_stride(fps, process_fps)
+
+    # في العرض المباشر نحدّث الـ pose/action كل فريم لتسريع التعرف على العامل والأشخاص على الطاولات
+    pose_stride = 1
 
     frame_index = 0
     if args.start_sec is not None and fps and fps > 0:
@@ -314,43 +295,6 @@ def main() -> None:
         crop_dir.mkdir(parents=True, exist_ok=True)
 
     frames_processed = 0
-    last_event = None  # آخر نتيجة detection/tracking كاملة، تُعاد استخدامها
-    # لرسم/بث كل فريم فورًا بدون انتظار أي شي من GPU/inference_service.
-
-    # -- تشغيل detection بخيط منفصل (background thread) --
-    # قبل هاد التعديل: pipeline.process_frame() كانت تُستدعى مباشرة جوّا
-    # اللوب الرئيسي، وبما إنها بتستدعي RemoteDetector.detect_with_pose()
-    # يلي عندها انتظار blocking لغاية 2 ثانية (RESULT_TIMEOUT_SECONDS) لرد
-    # inference_service، أي تأخير/ازدحام بالسيرفس كان بيوقف اللوب الرئيسي
-    # كامل -- يعني ما فيه قراءة فريم جديد ولا رسم ولا بث لـ Redis لحد ما
-    # يوصل الرد -- وهاد سبب التقطيع (stutter) اللي بيظهر بالفرونت كل ~13
-    # فريم. الحل: detection تصير بخيط لحالها، تحدّث _inference_result[0]
-    # كل ما تخلص، واللوب الرئيسي ياخد آخر قيمة جاهزة فورًا بدون انتظار.
-    import threading
-
-    _inference_lock = threading.Lock()
-    _inference_result: list = [None]  # صندوق واحد يحمل آخر event جاهز
-    _inference_busy = threading.Event()  # true طول ما فيه detection شغالة
-
-    def _run_detection_async(frame_copy, frame_idx, t_seconds):
-        try:
-            result = pipeline.process_frame(
-                frame=frame_copy,
-                camera_id=camera_id,
-                video_id=video_id,
-                pose_stride=pose_stride,
-                frame_index=frame_idx,
-                time_seconds=t_seconds,
-            )
-            with _inference_lock:
-                _inference_result[0] = result
-            if bridge is not None:
-                bridge.submit(result["frame_output"])
-        except Exception as e:
-            print(f"[WARNING] detection thread crashed on frame {frame_idx}: {e}")
-        finally:
-            _inference_busy.clear()
-
     try:
         while True:
             if args.max_frames is not None and frames_processed >= args.max_frames:
@@ -362,33 +306,17 @@ def main() -> None:
 
             time_seconds = frame_index / fps if fps and fps > 0 else None
 
-            # -- هنا التخفيف الفعلي لحمل الـ GPU: نطلق detection (بخيط
-            # منفصل، غير blocking) فقط كل frame_stride فريم، وفقط لو مافي
-            # detection شغالة أصلًا حاليًا (حتى ما نكدّس طلبات فوق بعض لو
-            # inference_service أبطأ من معدل الفيديو -- بدل ما تتراكم
-            # الطلبات وتكبر بالـ latency تدريجيًا، ببساطة نتخطى الفريمات
-            # الجديدة لحد ما تخلص اللي قبلها).
-            did_infer = frame_index % frame_stride == 0
-            if did_infer and not _inference_busy.is_set():
-                _inference_busy.set()
-                threading.Thread(
-                    target=_run_detection_async,
-                    args=(frame.copy(), frame_index, time_seconds),
-                    daemon=True,
-                ).start()
+            event = pipeline.process_frame(
+                frame=frame,
+                camera_id=camera_id,
+                video_id=video_id,
+                pose_stride=pose_stride,
+                frame_index=frame_index,
+                time_seconds=time_seconds,
+            )
 
-            with _inference_lock:
-                event = _inference_result[0]
-
-            if event is None:
-                # لسا ما وصل أول رد detection إطلاقًا (أول ثانية-ثانيتين
-                # من التشغيل) -- نبني event فاضي حتى نقدر نرسم/ننشر الفريم
-                # الخام بانتظار أول نتيجة حقيقية، بدل ما نوقف اللوب.
-                event = {"tracked_objects": [], "person_crops": [], "frame_output": None}
-            # ملاحظة: bridge.submit() صار يُستدعى جوّا _run_detection_async
-            # نفسها (فوق) لحظة ما تخلص كل detection فعليًا -- مش هون --
-            # حتى ما نبعت نفس frame_output أكتر من مرة، ولا نبعت None
-            # على الفريمات يلي لسا ماخدة event مؤقت فاضي.
+            if bridge is not None:
+                bridge.submit(event["frame_output"])
 
             try:
                 # 1. رسم المكونات الافتراضية للـ pipeline

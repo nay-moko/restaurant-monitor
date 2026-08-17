@@ -27,10 +27,12 @@ from ultralytics import YOLO
 REQUEST_QUEUE_KEY = "inference:requests"
 RESULT_CHANNEL_PREFIX = "inference:results:"
 
-# أقصى عدد فريمات نجمعهم بالـ batch الواحد، وأقصى وقت ننتظره قبل ما نعالج
-# batch جزئي (حتى ما نأخر كاميرا لحالها إذا الباقي ما بعتوش لسا).
-MAX_BATCH_SIZE = 6
-MAX_BATCH_WAIT_SECONDS = 0.05  # 50ms
+MAX_BATCH_SIZE = 8
+MAX_BATCH_WAIT_SECONDS = 0.03
+# أي طلب أقدم من هيك ما إله قيمة -- الفريم صار بالماضي، أفضل نرميه من نعالجه
+MAX_REQUEST_AGE_SECONDS = 1.0
+# سقف صارم لطول الطابور (تقريبًا طلبين لكل كاميرا)
+MAX_QUEUE_LEN = 12
 
 
 @dataclass
@@ -38,6 +40,7 @@ class PendingRequest:
     camera_id: str
     frame_index: int
     frame: np.ndarray
+    ts: float
 
 
 class InferenceService:
@@ -60,40 +63,57 @@ class InferenceService:
         self.redis = redis.Redis(host=redis_host, port=redis_port, db=redis_db)
 
     def _collect_batch(self) -> list[PendingRequest]:
-        """يجمع لغاية MAX_BATCH_SIZE طلب من قائمة الانتظار، بانتظار أقصاه
-        MAX_BATCH_WAIT_SECONDS حتى ما توقف كاميرا الباقي لحالها."""
-        batch: list[PendingRequest] = []
-        deadline = time.monotonic() + MAX_BATCH_WAIT_SECONDS
+            raws: list[bytes] = []
 
-        # أول عنصر: انتظار محجوب (blocking) لغاية ما يوصل شي، حتى ما نلف
-        # busy-loop وإحنا مافي شي بالقائمة إطلاقًا.
-        item = self.redis.blpop(REQUEST_QUEUE_KEY, timeout=1)
-        if item is None:
+            item = self.redis.blpop(REQUEST_QUEUE_KEY, timeout=1)
+            if item is None:
+                return []
+            raws.append(item[1])
+
+            # لو الـ GPU تأخر والطابور كبر، منرمي الأقدم فورًا بدل ما اللاتنسي
+            # يزيد خطيًا لكل الكاميرات (السبب الرئيسي لإحساس "المعالجة أبطأ من الفريمات")
+            self.redis.ltrim(REQUEST_QUEUE_KEY, -MAX_QUEUE_LEN, -1)
+
+            deadline = time.monotonic() + MAX_BATCH_WAIT_SECONDS
+            while len(raws) < MAX_BATCH_SIZE and time.monotonic() < deadline:
+                raw = self.redis.lpop(REQUEST_QUEUE_KEY)
+                if raw is None:
+                    time.sleep(0.002)
+                    continue
+                raws.append(raw)
+
+            batch: list[PendingRequest] = []
+            dropped = 0
+            now = time.time()
+
+            for raw in raws:
+                req = self._decode_request(raw)
+                if req is None:
+                    continue
+                if req.ts and (now - req.ts) > MAX_REQUEST_AGE_SECONDS:
+                    dropped += 1
+                    continue
+                batch.append(req)
+
+            if dropped:
+                print(f"[inference_service] أسقطنا {dropped} طلب متأخر (>{MAX_REQUEST_AGE_SECONDS}s)", flush=True)
+
             return batch
-        batch.append(self._decode_request(item[1]))
-
-        while len(batch) < MAX_BATCH_SIZE and time.monotonic() < deadline:
-            raw = self.redis.lpop(REQUEST_QUEUE_KEY)
-            if raw is None:
-                time.sleep(0.002)
-                continue
-            batch.append(self._decode_request(raw))
-
-        return batch
 
     @staticmethod
-    def _decode_request(raw: bytes) -> PendingRequest:
-        # الـ payload: JSON header بطول ثابت مفصول بـ '|' عن bytes الصورة
-        # الخام (JPEG)، حتى نتجنب overhead تحويل base64 لكل فريم.
-        header_len = int.from_bytes(raw[:4], "big")
-        header = json.loads(raw[4 : 4 + header_len])
-        jpeg_bytes = raw[4 + header_len :]
-        frame = cv2.imdecode(np.frombuffer(jpeg_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
-        return PendingRequest(
-            camera_id=header["camera_id"],
-            frame_index=header["frame_index"],
-            frame=frame,
-        )
+    def _decode_request(raw: bytes) -> PendingRequest | None:
+            header_len = int.from_bytes(raw[:4], "big")
+            header = json.loads(raw[4 : 4 + header_len])
+            jpeg_bytes = raw[4 + header_len :]
+            frame = cv2.imdecode(np.frombuffer(jpeg_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+            if frame is None:
+                return None
+            return PendingRequest(
+                camera_id=header["camera_id"],
+                frame_index=header["frame_index"],
+                frame=frame,
+                ts=float(header.get("ts", 0.0)),
+            )
 
     def _run_batch(self, batch: list[PendingRequest]) -> None:
         frames = [r.frame for r in batch]
